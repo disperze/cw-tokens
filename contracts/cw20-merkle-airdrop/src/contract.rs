@@ -13,7 +13,6 @@ use sha2::Digest;
 use std::convert::TryInto;
 
 use crate::error::ContractError;
-use crate::helpers::CosmosSignature;
 use crate::migrations::v0_12_1;
 use crate::msg::{
     AccountMapResponse, ConfigResponse, ExecuteMsg, InstantiateMsg, IsClaimedResponse,
@@ -247,24 +246,15 @@ pub fn execute_claim(
         None => info.sender.to_string(),
         Some(sig) => {
             // verify signature
-            let cosmos_signature: CosmosSignature = from_binary(&sig.signature)?;
-            cosmos_signature.verify(deps.as_ref(), &sig.claim_msg)?;
-            // get airdrop stage bech32 prefix and derive proof address from public key
-            let hrp = HRP.load(deps.storage, stage)?;
-            let proof_addr = cosmos_signature.derive_addr_from_pubkey(hrp.as_str())?;
-
-            if sig.extract_addr()? != info.sender {
-                return Err(ContractError::VerificationFailed {});
-            }
 
             // Save external address index
-            STAGE_ACCOUNT_MAP.save(
-                deps.storage,
-                (stage, proof_addr.clone()),
-                &info.sender.to_string(),
-            )?;
-
-            proof_addr
+            // STAGE_ACCOUNT_MAP.save(
+            //     deps.storage,
+            //     (stage, proof_addr.clone()),
+            //     &info.sender.to_string(),
+            // )?;
+            // proof_addr
+            info.sender.to_string()
         }
     };
 
