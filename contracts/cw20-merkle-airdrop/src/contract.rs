@@ -2,18 +2,21 @@ use crate::enumerable::query_all_address_map;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    attr, from_binary, to_binary, Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env,
-    MessageInfo, Response, StdResult, Uint128,
+    Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, attr, to_binary
 };
 use cw2::{get_contract_version, set_contract_version};
 use cw20::{BalanceResponse, Cw20Contract, Cw20ExecuteMsg, Cw20QueryMsg};
 use cw_utils::{Expiration, Scheduled};
 use semver::Version;
 use sha2::Digest;
+use sha3::Keccak256;
 use std::convert::TryInto;
 
 use crate::error::ContractError;
 use crate::migrations::v0_12_1;
+use crate::ethereum::{
+    ethereum_address_raw, get_recovery_param,
+};
 use crate::msg::{
     AccountMapResponse, ConfigResponse, ExecuteMsg, InstantiateMsg, IsClaimedResponse,
     IsPausedResponse, LatestStageResponse, MerkleRootResponse, MigrateMsg, QueryMsg, SignatureInfo,
@@ -247,14 +250,48 @@ pub fn execute_claim(
         Some(sig) => {
             // verify signature
 
+            let msg_str = String::from_utf8(sig.claim_msg.to_vec())
+            .map_err(|_| ContractError::InvalidInput {})?;
+            // Hashing
+            let mut hasher = Keccak256::new();
+            hasher.update(format!("\x19Ethereum Signed Message:\n{}", msg_str.len()));
+            hasher.update(msg_str);
+            let hash = hasher.finalize();
+
+            // Decompose signature
+            let (v, rs) = match sig.signature.as_slice().split_last() {
+                Some(pair) => pair,
+                None => return Err(StdError::generic_err("Signature must not be empty").into()),
+            };
+            let recovery = get_recovery_param(*v)?;
+
+            // Verification
+            let calculated_pubkey = deps.api.secp256k1_recover_pubkey(&hash, rs, recovery)?;
+            let result = deps.api.secp256k1_verify(&hash, rs, &calculated_pubkey);
+            let valid_signature = match result {
+                Ok(verifies) => verifies,
+                Err(_) => false,
+            };
+
+            if !valid_signature {
+                return Err(ContractError::VerificationFailed {})
+            }
+
+            let eth_addr = ethereum_address_raw(&calculated_pubkey)?;
+
+            if sig.extract_addr()? != info.sender {
+                return Err(ContractError::VerificationFailed {});
+            }
+            
+            let proof_addr = str::from_utf8(&eth_addr).unwrap().to_string();
             // Save external address index
-            // STAGE_ACCOUNT_MAP.save(
-            //     deps.storage,
-            //     (stage, proof_addr.clone()),
-            //     &info.sender.to_string(),
-            // )?;
-            // proof_addr
-            info.sender.to_string()
+            STAGE_ACCOUNT_MAP.save(
+                deps.storage,
+                (stage, proof_addr.clone()),
+                &info.sender.to_string(),
+            )?;
+
+            proof_addr
         }
     };
 

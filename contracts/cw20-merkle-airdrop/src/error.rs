@@ -1,4 +1,4 @@
-use cosmwasm_std::{StdError, Uint128};
+use cosmwasm_std::{StdError, RecoverPubkeyError, Uint128};
 use cw_utils::{Expiration, Scheduled};
 use hex::FromHexError;
 use thiserror::Error;
@@ -10,6 +10,9 @@ pub enum ContractError {
 
     #[error("{0}")]
     Hex(#[from] FromHexError),
+
+    #[error("{0}")]
+    Recovery(#[from] RecoverPubkeyError),
 
     #[error("Unauthorized")]
     Unauthorized {},
