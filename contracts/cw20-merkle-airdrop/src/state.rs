@@ -8,8 +8,7 @@ use cw_utils::{Expiration, Scheduled};
 pub struct Config {
     /// Owner If None set, contract is frozen.
     pub owner: Option<Addr>,
-    pub cw20_token_address: Option<Addr>,
-    pub native_token: Option<String>,
+    pub native_token: String,
 }
 
 pub const CONFIG_KEY: &str = "config";
@@ -43,9 +42,6 @@ pub const CLAIM: Map<(String, u8), bool> = Map::new(CLAIM_PREFIX);
 
 pub const CLAIMED_AMOUNT_PREFIX: &str = "claimed_amount";
 pub const CLAIMED_AMOUNT: Map<(&Addr, u8), bool> = Map::new(CLAIMED_AMOUNT_PREFIX);
-
-pub const HRP_PREFIX: &str = "hrp";
-pub const HRP: Map<u8, String> = Map::new(HRP_PREFIX);
 
 pub const STAGE_PAUSED_KEY: &str = "stage_paused";
 pub const STAGE_PAUSED: Map<u8, bool> = Map::new(STAGE_PAUSED_KEY);

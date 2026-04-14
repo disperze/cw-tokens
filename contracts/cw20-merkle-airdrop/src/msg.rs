@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct InstantiateMsg {
     /// Owner if none set to info.sender.
     pub owner: Option<String>,
-    pub cw20_token_address: Option<String>,
-    pub native_token: Option<String>,
+    pub native_token: String,
 }
 
 #[cw_serde]
@@ -18,8 +17,7 @@ pub enum ExecuteMsg {
         /// NewOwner if non sent, contract gets locked. Recipients can receive airdrops
         /// but owner cannot register new stages.
         new_owner: Option<String>,
-        new_cw20_address: Option<String>,
-        new_native_token: Option<String>,
+        new_native_token: String,
     },
     RegisterMerkleRoot {
         /// MerkleRoot is hex-encoded merkle root.
@@ -27,9 +25,6 @@ pub enum ExecuteMsg {
         expiration: Option<Expiration>,
         start: Option<Scheduled>,
         total_amount: Option<Uint128>,
-        // hrp is the bech32 parameter required for building external network address
-        // from signature message during claim action. example "cosmos", "terra", "juno"
-        hrp: Option<String>,
     },
     /// Claim does not check if contract has enough funds, owner must ensure it.
     Claim {
@@ -96,8 +91,7 @@ pub enum QueryMsg {
 #[cw_serde]
 pub struct ConfigResponse {
     pub owner: Option<String>,
-    pub cw20_token_address: Option<String>,
-    pub native_token: Option<String>,
+    pub native_token: String,
 }
 
 #[cw_serde]

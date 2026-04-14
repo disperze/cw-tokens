@@ -23,8 +23,7 @@ library = []
 [dependencies]
 cw-utils = "2.0"
 cw2 = "2.0"
-cw20 = "2.0"
-cosmwasm-std = "2.2"
+cosmwasm-std = { version = "2.2", features = ["cosmwasm_2_1"] }
 cw-storage-plus = "2.0"
 serde = { version = "1.0.137", default-features = false, features = ["derive"] }
 thiserror = "1.0.31"
@@ -35,5 +34,4 @@ sha3 = "0.10"
 cosmwasm-schema = "2.2"
 semver = "1.0.14"
 [dev-dependencies]
-cw20-base = { version = "2.0", features = ["library"] }
 cw-multi-test = "2.2"
