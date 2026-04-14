@@ -2,15 +2,14 @@ use crate::enumerable::query_all_address_map;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, attr, to_binary
+    Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, WasmMsg, attr, to_json_binary
 };
 use cw2::{get_contract_version, set_contract_version};
-use cw20::{BalanceResponse, Cw20Contract, Cw20ExecuteMsg, Cw20QueryMsg};
+use cw20::{BalanceResponse, Cw20ExecuteMsg, Cw20QueryMsg};
 use cw_utils::{Expiration, Scheduled};
 use semver::Version;
 use sha2::Digest;
 use sha3::Keccak256;
-use std::convert::TryInto;
 
 use crate::error::ContractError;
 use crate::migrations::v0_12_1;
@@ -268,10 +267,7 @@ pub fn execute_claim(
             // Verification
             let calculated_pubkey = deps.api.secp256k1_recover_pubkey(&hash, rs, recovery)?;
             let result = deps.api.secp256k1_verify(&hash, rs, &calculated_pubkey);
-            let valid_signature = match result {
-                Ok(verifies) => verifies,
-                Err(_) => false,
-            };
+            let valid_signature = result.unwrap_or_default();
 
             if !valid_signature {
                 return Err(ContractError::VerificationFailed {})
@@ -279,11 +275,11 @@ pub fn execute_claim(
 
             let eth_addr = ethereum_address_raw(&calculated_pubkey)?;
 
-            if sig.extract_addr()? != info.sender {
+            if sig.extract_addr()? != info.sender.as_str() {
                 return Err(ContractError::VerificationFailed {});
             }
             
-            let proof_addr = str::from_utf8(&eth_addr).unwrap().to_string();
+            let proof_addr = String::from_utf8_lossy(&eth_addr).to_string();
             // Save external address index
             STAGE_ACCOUNT_MAP.save(
                 deps.storage,
@@ -306,20 +302,14 @@ pub fn execute_claim(
     let merkle_root = MERKLE_ROOT.load(deps.storage, stage)?;
 
     let user_input = format!("{}{}", proof_addr, amount);
-    let hash = sha2::Sha256::digest(user_input.as_bytes())
-        .as_slice()
-        .try_into()
-        .map_err(|_| ContractError::WrongLength {})?;
+    let hash: [u8; 32] = sha2::Sha256::digest(user_input.as_bytes()).into();
 
     let hash = proof.into_iter().try_fold(hash, |hash, p| {
         let mut proof_buf = [0; 32];
         hex::decode_to_slice(p, &mut proof_buf)?;
         let mut hashes = [hash, proof_buf];
         hashes.sort_unstable();
-        sha2::Sha256::digest(&hashes.concat())
-            .as_slice()
-            .try_into()
-            .map_err(|_| ContractError::WrongLength {})
+        Ok::<[u8; 32], ContractError>(sha2::Sha256::digest(hashes.concat()).into())
     })?;
 
     let mut root_buf: [u8; 32] = [0; 32];
@@ -338,13 +328,14 @@ pub fn execute_claim(
 
     let message: CosmosMsg = match (config.cw20_token_address, config.native_token) {
         (Some(cw20_addr), None) => {
-            let msg = Cw20ExecuteMsg::Transfer {
-                recipient: info.sender.to_string(),
-                amount,
-            };
-            Cw20Contract(cw20_addr)
-                .call(msg)
-                .map_err(ContractError::Std)
+            Ok(CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: cw20_addr.to_string(),
+                msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
+                    recipient: info.sender.to_string(),
+                    amount,
+                })?,
+                funds: vec![],
+            }))
         }
         (None, Some(native)) => {
             let balance = deps
@@ -413,12 +404,13 @@ pub fn execute_burn(
     // Burn the tokens and response
     let message: CosmosMsg = match (cfg.cw20_token_address, cfg.native_token) {
         (Some(cw20_addr), None) => {
-            let msg = Cw20ExecuteMsg::Burn {
-                amount: balance_to_burn,
-            };
-            Cw20Contract(cw20_addr)
-                .call(msg)
-                .map_err(ContractError::Std)
+            Ok(CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: cw20_addr.to_string(),
+                msg: to_json_binary(&Cw20ExecuteMsg::Burn {
+                    amount: balance_to_burn,
+                })?,
+                funds: vec![],
+            }))
         }
         (None, Some(native)) => {
             let balance = deps
@@ -490,13 +482,14 @@ pub fn execute_withdraw(
     // Withdraw the tokens and response
     let message: CosmosMsg = match (cfg.cw20_token_address, cfg.native_token) {
         (Some(cw20_addr), None) => {
-            let msg = Cw20ExecuteMsg::Transfer {
-                recipient: recipient.into(),
-                amount: balance_to_withdraw,
-            };
-            Cw20Contract(cw20_addr)
-                .call(msg)
-                .map_err(ContractError::Std)
+            Ok(CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: cw20_addr.to_string(),
+                msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
+                    recipient: recipient.into(),
+                    amount: balance_to_withdraw,
+                })?,
+                funds: vec![],
+            }))
         }
         (None, Some(native)) => {
             let balance = deps
@@ -578,12 +571,13 @@ pub fn execute_burn_all(
     // Burn the tokens and response
     let message: CosmosMsg = match (cfg.cw20_token_address.clone(), cfg.native_token) {
         (Some(cw20_addr), None) => {
-            let msg = Cw20ExecuteMsg::Burn {
-                amount: total_amount,
-            };
-            Cw20Contract(cw20_addr)
-                .call(msg)
-                .map_err(ContractError::Std)
+            Ok(CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: cw20_addr.to_string(),
+                msg: to_json_binary(&Cw20ExecuteMsg::Burn {
+                    amount: total_amount,
+                })?,
+                funds: vec![],
+            }))
         }
         (None, Some(native)) => {
             let msg = BankMsg::Burn {
@@ -671,13 +665,14 @@ pub fn execute_withdraw_all(
     // Withdraw the tokens and return a response
     let message: CosmosMsg = match (cfg.cw20_token_address, cfg.native_token) {
         (Some(cw20_addr), None) => {
-            let msg = Cw20ExecuteMsg::Transfer {
-                recipient: recipient.into(),
-                amount: amount_to_withdraw,
-            };
-            Cw20Contract(cw20_addr)
-                .call(msg)
-                .map_err(ContractError::Std)
+            Ok(CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: cw20_addr.to_string(),
+                msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
+                    recipient: recipient.into(),
+                    amount: amount_to_withdraw,
+                })?,
+                funds: vec![],
+            }))
         }
         (None, Some(native)) => {
             let msg = BankMsg::Send {
@@ -777,23 +772,23 @@ pub fn execute_resume(
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::Config {} => to_binary(&query_config(deps)?),
-        QueryMsg::MerkleRoot { stage } => to_binary(&query_merkle_root(deps, stage)?),
-        QueryMsg::LatestStage {} => to_binary(&query_latest_stage(deps)?),
+        QueryMsg::Config {} => to_json_binary(&query_config(deps)?),
+        QueryMsg::MerkleRoot { stage } => to_json_binary(&query_merkle_root(deps, stage)?),
+        QueryMsg::LatestStage {} => to_json_binary(&query_latest_stage(deps)?),
         QueryMsg::IsClaimed { stage, address } => {
-            to_binary(&query_is_claimed(deps, stage, address)?)
+            to_json_binary(&query_is_claimed(deps, stage, address)?)
         }
-        QueryMsg::IsPaused { stage } => to_binary(&query_is_paused(deps, stage)?),
-        QueryMsg::TotalClaimed { stage } => to_binary(&query_total_claimed(deps, stage)?),
+        QueryMsg::IsPaused { stage } => to_json_binary(&query_is_paused(deps, stage)?),
+        QueryMsg::TotalClaimed { stage } => to_json_binary(&query_total_claimed(deps, stage)?),
         QueryMsg::AccountMap {
             stage,
             external_address,
-        } => to_binary(&query_address_map(deps, stage, external_address)?),
+        } => to_json_binary(&query_address_map(deps, stage, external_address)?),
         QueryMsg::AllAccountMaps {
             stage,
             start_after,
             limit,
-        } => to_binary(&query_all_address_map(deps, stage, start_after, limit)?),
+        } => to_json_binary(&query_all_address_map(deps, stage, start_after, limit)?),
     }
 }
 
@@ -890,14 +885,14 @@ pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, C
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
-    use crate::msg::SignatureInfo;
     use cosmwasm_schema::cw_serde;
     use cosmwasm_std::testing::{
         mock_dependencies, mock_dependencies_with_balance, mock_env, mock_info,
     };
     use cosmwasm_std::{
-        from_binary, from_slice, Attribute, BlockInfo, CosmosMsg, Empty, SubMsg, Timestamp, WasmMsg,
+        from_json, Attribute, BlockInfo, CosmosMsg, Empty, SubMsg, Timestamp, WasmMsg,
     };
     use cw20::MinterResponse;
     use cw_multi_test::{App, Contract, ContractWrapper, Executor};
@@ -943,13 +938,13 @@ mod tests {
 
         // it worked, let's query the state
         let res = query(deps.as_ref(), env.clone(), QueryMsg::Config {}).unwrap();
-        let config: ConfigResponse = from_binary(&res).unwrap();
+        let config: ConfigResponse = from_json(&res).unwrap();
         assert_eq!("owner0000", config.owner.unwrap().as_str());
         assert_eq!("anchor0000", config.cw20_token_address.unwrap().as_str());
         assert_eq!(None, config.native_token);
 
         let res = query(deps.as_ref(), env, QueryMsg::LatestStage {}).unwrap();
-        let latest_stage: LatestStageResponse = from_binary(&res).unwrap();
+        let latest_stage: LatestStageResponse = from_json(&res).unwrap();
         assert_eq!(0u8, latest_stage.latest_stage);
     }
 
@@ -971,13 +966,13 @@ mod tests {
 
         // it worked, let's query the state
         let res = query(deps.as_ref(), env.clone(), QueryMsg::Config {}).unwrap();
-        let config: ConfigResponse = from_binary(&res).unwrap();
+        let config: ConfigResponse = from_json(&res).unwrap();
         assert_eq!("owner0000", config.owner.unwrap().as_str());
         assert_eq!("ujunox", config.native_token.unwrap().as_str());
         assert_eq!(None, config.cw20_token_address);
 
         let res = query(deps.as_ref(), env, QueryMsg::LatestStage {}).unwrap();
-        let latest_stage: LatestStageResponse = from_binary(&res).unwrap();
+        let latest_stage: LatestStageResponse = from_json(&res).unwrap();
         assert_eq!(0u8, latest_stage.latest_stage);
     }
 
@@ -1028,7 +1023,7 @@ mod tests {
 
         // it worked, let's query the state
         let res = query(deps.as_ref(), env, QueryMsg::Config {}).unwrap();
-        let config: ConfigResponse = from_binary(&res).unwrap();
+        let config: ConfigResponse = from_json(&res).unwrap();
         assert_eq!("owner0001", config.owner.unwrap().as_str());
         assert_eq!("cw20_0000", config.cw20_token_address.unwrap().as_str());
 
@@ -1056,7 +1051,7 @@ mod tests {
         let _res = execute(deps.as_mut(), env.clone(), info, msg).ok();
 
         let query_result = query(deps.as_ref(), env, QueryMsg::Config {}).unwrap();
-        let config: ConfigResponse = from_binary(&query_result).unwrap();
+        let config: ConfigResponse = from_json(&query_result).unwrap();
         assert_eq!("owner0001", config.owner.unwrap().as_str());
         assert_eq!("ujunox", config.native_token.unwrap().as_str());
 
@@ -1114,7 +1109,7 @@ mod tests {
         );
 
         let res = query(deps.as_ref(), env.clone(), QueryMsg::LatestStage {}).unwrap();
-        let latest_stage: LatestStageResponse = from_binary(&res).unwrap();
+        let latest_stage: LatestStageResponse = from_json(&res).unwrap();
         assert_eq!(1u8, latest_stage.latest_stage);
 
         let res = query(
@@ -1125,7 +1120,7 @@ mod tests {
             },
         )
         .unwrap();
-        let merkle_root: MerkleRootResponse = from_binary(&res).unwrap();
+        let merkle_root: MerkleRootResponse = from_json(&res).unwrap();
         assert_eq!(
             "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37".to_string(),
             merkle_root.merkle_root
@@ -1149,7 +1144,7 @@ mod tests {
     fn claim_cw20() {
         // Run test 1
         let mut deps = mock_dependencies();
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -1185,7 +1180,7 @@ mod tests {
         let expected = SubMsg::new(CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: "token0000".to_string(),
             funds: vec![],
-            msg: to_binary(&Cw20ExecuteMsg::Transfer {
+            msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
                 recipient: test_data.account.clone(),
                 amount: test_data.amount,
             })
@@ -1205,7 +1200,7 @@ mod tests {
 
         // Check total claimed on stage 1
         assert_eq!(
-            from_binary::<TotalClaimedResponse>(
+            from_json::<TotalClaimedResponse>(
                 &query(
                     deps.as_ref(),
                     env.clone(),
@@ -1220,7 +1215,7 @@ mod tests {
 
         // Check address is claimed
         assert!(
-            from_binary::<IsClaimedResponse>(
+            from_json::<IsClaimedResponse>(
                 &query(
                     deps.as_ref(),
                     env.clone(),
@@ -1240,7 +1235,7 @@ mod tests {
         assert_eq!(res, ContractError::Claimed {});
 
         // Second test
-        let test_data: Encoded = from_slice(TEST_DATA_2).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_2).unwrap();
 
         // register new drop
         let env = mock_env();
@@ -1268,7 +1263,7 @@ mod tests {
         let expected: SubMsg<_> = SubMsg::new(CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: "token0000".to_string(),
             funds: vec![],
-            msg: to_binary(&Cw20ExecuteMsg::Transfer {
+            msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
                 recipient: test_data.account.clone(),
                 amount: test_data.amount,
             })
@@ -1288,7 +1283,7 @@ mod tests {
 
         // Check total claimed on stage 2
         assert_eq!(
-            from_binary::<TotalClaimedResponse>(
+            from_json::<TotalClaimedResponse>(
                 &query(deps.as_ref(), env, QueryMsg::TotalClaimed { stage: 2 }).unwrap()
             )
             .unwrap()
@@ -1306,7 +1301,7 @@ mod tests {
             denom: "ujunox".to_string(),
             amount: Uint128::new(1234567),
         }]);
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -1360,7 +1355,7 @@ mod tests {
 
         // Check total claimed on stage 1
         assert_eq!(
-            from_binary::<TotalClaimedResponse>(
+            from_json::<TotalClaimedResponse>(
                 &query(
                     deps.as_ref(),
                     env.clone(),
@@ -1375,7 +1370,7 @@ mod tests {
 
         // Check address is claimed
         assert!(
-            from_binary::<IsClaimedResponse>(
+            from_json::<IsClaimedResponse>(
                 &query(
                     deps.as_ref(),
                     env.clone(),
@@ -1395,7 +1390,7 @@ mod tests {
         assert_eq!(res, ContractError::Claimed {});
 
         // Second test
-        let test_data: Encoded = from_slice(TEST_DATA_2).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_2).unwrap();
 
         // register new drop
         let env = mock_env();
@@ -1441,7 +1436,7 @@ mod tests {
 
         // Check total claimed on stage 2
         assert_eq!(
-            from_binary::<TotalClaimedResponse>(
+            from_json::<TotalClaimedResponse>(
                 &query(deps.as_ref(), env, QueryMsg::TotalClaimed { stage: 2 }).unwrap()
             )
             .unwrap()
@@ -1457,7 +1452,7 @@ mod tests {
             denom: "ujunox".to_string(),
             amount: Uint128::zero(),
         }]);
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -1520,7 +1515,7 @@ mod tests {
     fn multiple_claim_cw20() {
         // Run test 1
         let mut deps = mock_dependencies();
-        let test_data: MultipleData = from_slice(TEST_DATA_1_MULTI).unwrap();
+        let test_data: MultipleData = from_json(TEST_DATA_1_MULTI).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -1558,7 +1553,7 @@ mod tests {
             let expected = SubMsg::new(CosmosMsg::Wasm(WasmMsg::Execute {
                 contract_addr: "token0000".to_string(),
                 funds: vec![],
-                msg: to_binary(&Cw20ExecuteMsg::Transfer {
+                msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
                     recipient: account.account.clone(),
                     amount: account.amount,
                 })
@@ -1580,7 +1575,7 @@ mod tests {
         // Check total claimed on stage 1
         let env = mock_env();
         assert_eq!(
-            from_binary::<TotalClaimedResponse>(
+            from_json::<TotalClaimedResponse>(
                 &query(deps.as_ref(), env, QueryMsg::TotalClaimed { stage: 1 }).unwrap()
             )
             .unwrap()
@@ -1596,7 +1591,7 @@ mod tests {
             denom: "ujunox".to_string(),
             amount: Uint128::new(1234567),
         }]);
-        let test_data: MultipleData = from_slice::<MultipleData>(TEST_DATA_1_MULTI).unwrap();
+        let test_data: MultipleData = from_json::<MultipleData>(TEST_DATA_1_MULTI).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -1654,7 +1649,7 @@ mod tests {
         // Check total claimed on stage 1
         let env = mock_env();
         assert_eq!(
-            from_binary::<TotalClaimedResponse>(
+            from_json::<TotalClaimedResponse>(
                 &query(deps.as_ref(), env, QueryMsg::TotalClaimed { stage: 1 }).unwrap()
             )
             .unwrap()
@@ -1792,7 +1787,7 @@ mod tests {
     #[test]
     fn can_burn_cw20() {
         let mut deps = mock_dependencies();
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -1827,7 +1822,7 @@ mod tests {
         let expected = SubMsg::new(CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: "token0000".to_string(),
             funds: vec![],
-            msg: to_binary(&Cw20ExecuteMsg::Transfer {
+            msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
                 recipient: test_data.account.clone(),
                 amount: test_data.amount,
             })
@@ -1857,7 +1852,7 @@ mod tests {
         let expected = SubMsg::new(CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: "token0000".to_string(),
             funds: vec![],
-            msg: to_binary(&Cw20ExecuteMsg::Burn {
+            msg: to_json_binary(&Cw20ExecuteMsg::Burn {
                 amount: Uint128::new(9900),
             })
             .unwrap(),
@@ -1927,7 +1922,7 @@ mod tests {
             )
             .unwrap();
 
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
         //register airdrop
         let register_msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
@@ -2043,7 +2038,7 @@ mod tests {
             amount: Uint128::new(10000),
         }]);
 
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -2151,7 +2146,7 @@ mod tests {
             amount: Uint128::new(10000),
         }]);
 
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -2289,7 +2284,7 @@ mod tests {
     #[test]
     fn can_withdraw_cw20() {
         let mut deps = mock_dependencies();
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -2324,7 +2319,7 @@ mod tests {
         let expected = SubMsg::new(CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: "token0000".to_string(),
             funds: vec![],
-            msg: to_binary(&Cw20ExecuteMsg::Transfer {
+            msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
                 recipient: test_data.account.clone(),
                 amount: test_data.amount,
             })
@@ -2357,7 +2352,7 @@ mod tests {
         let expected = SubMsg::new(CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: "token0000".to_string(),
             funds: vec![],
-            msg: to_binary(&Cw20ExecuteMsg::Transfer {
+            msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
                 amount: Uint128::new(9900),
                 recipient: "addr0005".to_string(),
             })
@@ -2429,7 +2424,7 @@ mod tests {
             )
             .unwrap();
 
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
         //register airdrop
         let register_msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
@@ -2630,7 +2625,7 @@ mod tests {
             denom: "ujunox".to_string(),
             amount: Uint128::new(10000),
         }]);
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -2720,7 +2715,7 @@ mod tests {
             denom: "ujunox".to_string(),
             amount: Uint128::new(10000),
         }]);
-        let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
             owner: Some("owner0000".to_string()),
@@ -2905,39 +2900,12 @@ mod tests {
             include_bytes!("../testdata/airdrop_external_sig_test_data.json");
 
         #[test]
-        fn test_cosmos_sig_verify() {
-            let deps = mock_dependencies();
-            let signature_raw = Binary::from_base64("eyJwdWJfa2V5IjoiQWhOZ2UxV01aVXl1ODZ5VGx5ZWpEdVVxUFZTdURONUJhQzArdkw4b3RkSnYiLCJzaWduYXR1cmUiOiJQY1FPczhXSDVPMndXL3Z3ZzZBTElqaW9VNGorMUZYNTZKU1R1MzdIb2lGbThJck5aem5HaGlIRFV1R1VTUmlhVnZRZ2s4Q0tURmNyeVpuYjZLNVhyQT09In0=");
-
-            let sig = SignatureInfo {
-                claim_msg: Binary::from_base64("eyJhY2NvdW50X251bWJlciI6IjExMjM2IiwiY2hhaW5faWQiOiJwaXNjby0xIiwiZmVlIjp7ImFtb3VudCI6W3siYW1vdW50IjoiMTU4MTIiLCJkZW5vbSI6InVsdW5hIn1dLCJnYXMiOiIxMDU0MDcifSwibWVtbyI6Imp1bm8xMHMydXU5MjY0ZWhscWw1ZnB5cmg5dW5kbmw1bmxhdzYzdGQwaGgiLCJtc2dzIjpbeyJ0eXBlIjoiY29zbW9zLXNkay9Nc2dTZW5kIiwidmFsdWUiOnsiYW1vdW50IjpbeyJhbW91bnQiOiIxIiwiZGVub20iOiJ1bHVuYSJ9XSwiZnJvbV9hZGRyZXNzIjoidGVycmExZmV6NTlzdjh1cjk3MzRmZnJwdndwY2phZHg3bjB4Nno2eHdwN3oiLCJ0b19hZGRyZXNzIjoidGVycmExZmV6NTlzdjh1cjk3MzRmZnJwdndwY2phZHg3bjB4Nno2eHdwN3oifX1dLCJzZXF1ZW5jZSI6IjAifQ==").unwrap(),
-                signature: signature_raw.unwrap(),
-            };
-            let cosmos_signature: CosmosSignature = from_binary(&sig.signature).unwrap();
-            let res = cosmos_signature
-                .verify(deps.as_ref(), &sig.claim_msg)
-                .unwrap();
-            assert!(res);
-        }
-
-        #[test]
-        fn test_derive_addr_from_pubkey() {
-            let test_data: Encoded = from_slice(TEST_DATA_EXTERNAL_SIG).unwrap();
-            let cosmos_signature: CosmosSignature =
-                from_binary(&test_data.signed_msg.unwrap().signature).unwrap();
-            let derived_addr = cosmos_signature
-                .derive_addr_from_pubkey(&test_data.hrp.unwrap())
-                .unwrap();
-            assert_eq!(test_data.account, derived_addr);
-        }
-
-        #[test]
         fn claim_with_external_sigs() {
             let mut deps = mock_dependencies_with_balance(&[Coin {
                 denom: "ujunox".to_string(),
                 amount: Uint128::new(1234567),
             }]);
-            let test_data: Encoded = from_slice(TEST_DATA_EXTERNAL_SIG).unwrap();
+            let test_data: Encoded = from_json(TEST_DATA_EXTERNAL_SIG).unwrap();
             let claim_addr = test_data
                 .signed_msg
                 .clone()
@@ -3013,7 +2981,7 @@ mod tests {
 
             // Check total claimed on stage 1
             assert_eq!(
-                from_binary::<TotalClaimedResponse>(
+                from_json::<TotalClaimedResponse>(
                     &query(
                         deps.as_ref(),
                         env.clone(),
@@ -3028,7 +2996,7 @@ mod tests {
 
             // Check address is claimed
             assert!(
-                from_binary::<IsClaimedResponse>(
+                from_json::<IsClaimedResponse>(
                     &query(
                         deps.as_ref(),
                         env.clone(),
@@ -3049,7 +3017,7 @@ mod tests {
 
             // query map
 
-            let map = from_binary::<AccountMapResponse>(
+            let map = from_json::<AccountMapResponse>(
                 &query(
                     deps.as_ref(),
                     env,
@@ -3071,7 +3039,7 @@ mod tests {
                 denom: "ujunox".to_string(),
                 amount: Uint128::new(1234567),
             }]);
-            let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+            let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
             let msg = InstantiateMsg {
                 owner: Some("owner0000".to_string()),
@@ -3164,7 +3132,7 @@ mod tests {
                 denom: "ujunox".to_string(),
                 amount: Uint128::new(10000),
             }]);
-            let test_data: Encoded = from_slice(TEST_DATA_1).unwrap();
+            let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
             let msg = InstantiateMsg {
                 owner: Some("owner0000".to_string()),
