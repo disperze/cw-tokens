@@ -4,20 +4,18 @@ use cosmwasm_std::entry_point;
 use cosmwasm_std::{
     Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, attr, to_json_binary
 };
-use cw2::{get_contract_version, set_contract_version};
+use cw2::set_contract_version;
 use cw_utils::{Expiration, Scheduled};
-use semver::Version;
 use sha2::Digest;
 use sha3::Keccak256;
 
 use crate::error::ContractError;
-use crate::migrations::v0_12_1;
 use crate::ethereum::{
     ethereum_address_raw, get_recovery_param,
 };
 use crate::msg::{
     AccountMapResponse, ConfigResponse, ExecuteMsg, InstantiateMsg, IsClaimedResponse,
-    IsPausedResponse, LatestStageResponse, MerkleRootResponse, MigrateMsg, QueryMsg, SignatureInfo,
+    IsPausedResponse, LatestStageResponse, MerkleRootResponse, QueryMsg, SignatureInfo,
     TotalClaimedResponse,
 };
 use crate::state::{
@@ -730,27 +728,6 @@ pub fn query_address_map(
     };
 
     Ok(resp)
-}
-
-#[cfg_attr(not(feature = "library"), entry_point)]
-pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
-    let contract_info = get_contract_version(deps.storage)?;
-    if contract_info.contract != CONTRACT_NAME {
-        return Err(ContractError::CannotMigrate {
-            previous_contract: contract_info.contract,
-        });
-    }
-    let contract_version: Version = contract_info.version.parse()?;
-    let current_version: Version = CONTRACT_VERSION.parse()?;
-    if contract_version < current_version {
-        set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-        v0_12_1::set_initial_pause_status(deps)?;
-        Ok(Response::default())
-    } else {
-        Err(ContractError::CannotMigrate {
-            previous_contract: contract_info.version,
-        })
-    }
 }
 
 #[cfg(test)]
