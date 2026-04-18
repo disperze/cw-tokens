@@ -26,6 +26,10 @@ pub enum ContractError {
     #[error("Wrong length")]
     WrongLength {},
 
+
+    #[error("Verification failed")]
+    InvalidSignature {},
+
     #[error("Verification failed")]
     VerificationFailed {},
 

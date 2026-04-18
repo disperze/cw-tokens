@@ -245,13 +245,13 @@ pub fn execute_claim(
             let valid_signature = result.unwrap_or_default();
 
             if !valid_signature {
-                return Err(ContractError::VerificationFailed {})
+                return Err(ContractError::InvalidSignature {})
             }
 
             let eth_addr = ethereum_address_raw(&calculated_pubkey)?;
 
             if sig.extract_addr()? != info.sender.as_str() {
-                return Err(ContractError::VerificationFailed {});
+                return Err(ContractError::InvalidSignature {});
             }
             
             let proof_addr = String::from_utf8_lossy(&eth_addr).to_string();
