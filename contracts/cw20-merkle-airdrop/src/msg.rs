@@ -150,7 +150,5 @@ impl SignatureInfo {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ClaimMsg {
-    // To provide claiming via ledger, the address is passed in the memo field of a cosmos msg.
-    #[serde(rename = "memo")]
     address: String,
 }
