@@ -734,28 +734,45 @@ pub fn query_address_map(
 mod tests {
 
     use super::*;
+    use std::marker::PhantomData;
     use cosmwasm_schema::cw_serde;
     use cosmwasm_std::testing::{
-        mock_dependencies, mock_dependencies_with_balance, mock_env, mock_info,
+        MOCK_CONTRACT_ADDR, MockApi, MockQuerier, MockStorage, message_info, mock_dependencies, mock_env,
     };
-    use cosmwasm_std::{from_json, CosmosMsg, SubMsg};
+
+    use cosmwasm_std::{from_json, CosmosMsg, Coin, OwnedDeps, SubMsg};
     use cw_utils::Expiration::AtHeight;
     use serde::{Deserialize, Serialize};
 
     use crate::contract::{execute, instantiate, query};
     use crate::msg::{ExecuteMsg, InstantiateMsg};
 
+    fn mock_dependencies_with_balance(
+        contract_balance: &[Coin],
+    ) -> OwnedDeps<MockStorage, MockApi, MockQuerier> {
+
+        let balances = [(MOCK_CONTRACT_ADDR, contract_balance)];
+        OwnedDeps {
+            storage: MockStorage::default(),
+            api: MockApi::default().with_prefix("wasm"),
+            querier: MockQuerier::new(&balances),
+            custom_query_type: PhantomData,
+        }
+    }
+
     #[test]
     fn proper_instantiation_native() {
         let mut deps = mock_dependencies();
 
+        let owner = deps.api.addr_make("owner0000");
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(owner.to_string()),
             native_token: String::from("ujunox"),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let sender = deps.api.addr_make("owner0000");
+        let info = message_info(&sender, &[]);
 
         // we can just call .unwrap() to assert this was a success
         let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
@@ -763,7 +780,7 @@ mod tests {
         // it worked, let's query the state
         let res = query(deps.as_ref(), env.clone(), QueryMsg::Config {}).unwrap();
         let config: ConfigResponse = from_json(&res).unwrap();
-        assert_eq!("owner0000", config.owner.unwrap().as_str());
+        assert_eq!(owner.to_string(), config.owner.unwrap().as_str());
         assert_eq!("ujunox", config.native_token.as_str());
 
         let res = query(deps.as_ref(), env, QueryMsg::LatestStage {}).unwrap();
@@ -781,14 +798,15 @@ mod tests {
         };
 
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         // update owner and native token
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let new_owner = deps.api.addr_make("owner0001");
         let msg = ExecuteMsg::UpdateConfig {
-            new_owner: Some("owner0001".to_string()),
+            new_owner: Some(new_owner.to_string()),
             new_native_token: "uatom".to_string(),
         };
 
@@ -798,12 +816,12 @@ mod tests {
         // it worked, let's query the state
         let res = query(deps.as_ref(), env, QueryMsg::Config {}).unwrap();
         let config: ConfigResponse = from_json(&res).unwrap();
-        assert_eq!("owner0001", config.owner.unwrap().as_str());
+        assert_eq!(new_owner.to_string(), config.owner.unwrap().as_str());
         assert_eq!("uatom", config.native_token.as_str());
 
         // Unauthorized err
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
             new_owner: None,
             new_native_token: "ujunox".to_string(),
@@ -814,7 +832,7 @@ mod tests {
 
         // freeze contract (owner set to None)
         let env = mock_env();
-        let info = mock_info("owner0001", &[]);
+        let info = message_info(&deps.api.addr_make("owner0001"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
             new_owner: None,
             new_native_token: "ujunox".to_string(),
@@ -833,17 +851,17 @@ mod tests {
         let mut deps = mock_dependencies();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         // register new merkle root
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37"
                 .to_string(),
@@ -908,16 +926,16 @@ mod tests {
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: None,
@@ -926,6 +944,7 @@ mod tests {
         };
         let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
+        let account = test_data.account;
         let msg = ExecuteMsg::Claim {
             amount: test_data.amount,
             stage: 1u8,
@@ -934,10 +953,10 @@ mod tests {
         };
 
         let env = mock_env();
-        let info = mock_info(test_data.account.as_str(), &[]);
+        let info = message_info(&Addr::unchecked(account.clone()), &[]);
         let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
-            to_address: test_data.account.clone(),
+            to_address: account.clone(),
             amount: vec![Coin {
                 denom: "ujunox".to_string(),
                 amount: test_data.amount,
@@ -950,7 +969,7 @@ mod tests {
             vec![
                 attr("action", "claim"),
                 attr("stage", "1"),
-                attr("address", test_data.account.clone()),
+                attr("address", account.clone()),
                 attr("amount", test_data.amount),
             ]
         );
@@ -978,7 +997,7 @@ mod tests {
                     env.clone(),
                     QueryMsg::IsClaimed {
                         stage: 1,
-                        address: test_data.account,
+                        address: account,
                     },
                 )
                 .unwrap()
@@ -996,7 +1015,7 @@ mod tests {
 
         // register new drop
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: None,
@@ -1006,6 +1025,7 @@ mod tests {
         let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         // Claim next airdrop
+        let account = test_data.account;
         let msg = ExecuteMsg::Claim {
             amount: test_data.amount,
             stage: 2u8,
@@ -1014,10 +1034,10 @@ mod tests {
         };
 
         let env = mock_env();
-        let info = mock_info(test_data.account.as_str(), &[]);
+        let info = message_info(&Addr::unchecked(account.clone()), &[]);
         let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
-            to_address: test_data.account.clone(),
+            to_address: account.clone(),
             amount: vec![Coin {
                 denom: "ujunox".to_string(),
                 amount: test_data.amount,
@@ -1030,7 +1050,7 @@ mod tests {
             vec![
                 attr("action", "claim"),
                 attr("stage", "2"),
-                attr("address", test_data.account),
+                attr("address", account),
                 attr("amount", test_data.amount),
             ]
         );
@@ -1056,16 +1076,16 @@ mod tests {
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: None,
@@ -1074,6 +1094,7 @@ mod tests {
         };
         let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
+        let account = test_data.account;
         let msg = ExecuteMsg::Claim {
             amount: test_data.amount,
             stage: 1u8,
@@ -1082,7 +1103,7 @@ mod tests {
         };
 
         let env = mock_env();
-        let info = mock_info(test_data.account.as_str(), &[]);
+        let info = message_info(&Addr::unchecked(account), &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
         assert_eq!(
             ContractError::InsufficientFunds {
@@ -1120,16 +1141,16 @@ mod tests {
         let test_data: MultipleData = from_json::<MultipleData>(TEST_DATA_1_MULTI).unwrap();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: None,
@@ -1148,7 +1169,7 @@ mod tests {
             };
 
             let env = mock_env();
-            let info = mock_info(account.account.as_str(), &[]);
+            let info = message_info(&Addr::unchecked(account.account.as_str()), &[]);
             let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
             let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
                 to_address: account.account.clone(),
@@ -1188,17 +1209,17 @@ mod tests {
         let mut deps = mock_dependencies();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         // can register merkle root
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: "5d4f48f147cb6cb742b376dce5626b2a036f69faec10cd73631c791780e150fc"
                 .to_string(),
@@ -1231,17 +1252,17 @@ mod tests {
         let mut deps = mock_dependencies();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         // can register merkle root
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: "5d4f48f147cb6cb742b376dce5626b2a036f69faec10cd73631c791780e150fc"
                 .to_string(),
@@ -1269,17 +1290,17 @@ mod tests {
         let mut deps = mock_dependencies();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         // can register merkle root
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: "5d4f48f147cb6cb742b376dce5626b2a036f69faec10cd73631c791780e150fc"
                 .to_string(),
@@ -1312,15 +1333,15 @@ mod tests {
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: Some(Expiration::AtHeight(12500)),
@@ -1330,6 +1351,7 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
         // Claim some tokens
+        let account = test_data.account;
         let msg = ExecuteMsg::Claim {
             amount: test_data.amount,
             stage: 1u8,
@@ -1337,10 +1359,10 @@ mod tests {
             sig_info: None,
         };
 
-        let info = mock_info(test_data.account.as_str(), &[]);
+        let info = message_info(&Addr::unchecked(account.clone()), &[]);
         let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
-            to_address: test_data.account.clone(),
+            to_address: account.clone(),
             amount: vec![Coin {
                 denom: "ujunox".to_string(),
                 amount: test_data.amount,
@@ -1353,7 +1375,7 @@ mod tests {
             vec![
                 attr("action", "claim"),
                 attr("stage", "1"),
-                attr("address", test_data.account.clone()),
+                attr("address", account),
                 attr("amount", test_data.amount),
             ]
         );
@@ -1361,7 +1383,7 @@ mod tests {
         // Not expired yet. Can't burn before pause
         let msg = ExecuteMsg::Burn { stage: 1u8 };
 
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
 
         assert_eq!(
@@ -1375,7 +1397,7 @@ mod tests {
         //Pause the stage
         let pause_msg = ExecuteMsg::Pause { stage: 1u8 };
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let result = execute(deps.as_mut(), env.clone(), info, pause_msg).unwrap();
 
         assert_eq!(
@@ -1386,7 +1408,7 @@ mod tests {
         //Burn when paused
         let msg = ExecuteMsg::Burn { stage: 1u8 };
 
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Burn {
@@ -1418,15 +1440,15 @@ mod tests {
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let mut env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: Some(Expiration::AtHeight(12500)),
@@ -1441,7 +1463,7 @@ mod tests {
         // Can burn after expired stage
         let msg = ExecuteMsg::BurnAll {};
 
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Burn {
@@ -1467,17 +1489,17 @@ mod tests {
         let mut deps = mock_dependencies();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         // can register merkle root
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: "5d4f48f147cb6cb742b376dce5626b2a036f69faec10cd73631c791780e150fc"
                 .to_string(),
@@ -1508,17 +1530,17 @@ mod tests {
         let mut deps = mock_dependencies();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         // can register merkle root
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: "5d4f48f147cb6cb742b376dce5626b2a036f69faec10cd73631c791780e150fc"
                 .to_string(),
@@ -1553,15 +1575,15 @@ mod tests {
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let mut env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: Some(Expiration::AtHeight(12500)),
@@ -1571,6 +1593,7 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
         // Claim some tokens
+        let account = test_data.account;
         let msg = ExecuteMsg::Claim {
             amount: test_data.amount,
             stage: 1u8,
@@ -1578,10 +1601,10 @@ mod tests {
             sig_info: None,
         };
 
-        let info = mock_info(test_data.account.as_str(), &[]);
+        let info = message_info(&Addr::unchecked(account.clone()), &[]);
         let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
-            to_address: test_data.account.clone(),
+            to_address: account.clone(),
             amount: vec![Coin {
                 denom: "ujunox".to_string(),
                 amount: test_data.amount,
@@ -1594,7 +1617,7 @@ mod tests {
             vec![
                 attr("action", "claim"),
                 attr("stage", "1"),
-                attr("address", test_data.account.clone()),
+                attr("address", account),
                 attr("amount", test_data.amount),
             ]
         );
@@ -1608,7 +1631,7 @@ mod tests {
             address: "addr0005".to_string(),
         };
 
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
@@ -1641,15 +1664,15 @@ mod tests {
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let mut env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: Some(Expiration::AtHeight(12500)),
@@ -1667,7 +1690,7 @@ mod tests {
             amount: None,
         };
 
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
@@ -1695,17 +1718,17 @@ mod tests {
         let mut deps = mock_dependencies();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         // can register merkle root
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: "5d4f48f147cb6cb742b376dce5626b2a036f69faec10cd73631c791780e150fc"
                 .to_string(),
@@ -1738,17 +1761,17 @@ mod tests {
         let mut deps = mock_dependencies();
 
         let msg = InstantiateMsg {
-            owner: Some("owner0000".to_string()),
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
             native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
-        let info = mock_info("addr0000", &[]);
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
         // can register merkle root
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: "5d4f48f147cb6cb742b376dce5626b2a036f69faec10cd73631c791780e150fc"
                 .to_string(),
@@ -1760,9 +1783,9 @@ mod tests {
 
         // can update owner
         let env = mock_env();
-        let info = mock_info("owner0000", &[]);
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
-            new_owner: Some("owner0001".to_string()),
+            new_owner: Some(deps.api.addr_make("owner0001").to_string()),
             new_native_token: "ujunox".to_string(),
         };
 
@@ -1771,7 +1794,7 @@ mod tests {
 
         // freeze contract
         let env = mock_env();
-        let info = mock_info("owner0001", &[]);
+        let info = message_info(&deps.api.addr_make("owner0001"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
             new_owner: None,
             new_native_token: "ujunox".to_string(),
@@ -1782,7 +1805,7 @@ mod tests {
 
         // cannot register new drop
         let env = mock_env();
-        let info = mock_info("owner0001", &[]);
+        let info = message_info(&deps.api.addr_make("owner0001"), &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: "ebaa83c7eaf7467c378d2f37b5e46752d904d2d17acd380b24b02e3b398b3e5a"
                 .to_string(),
@@ -1795,9 +1818,9 @@ mod tests {
 
         // cannot update config
         let env = mock_env();
-        let info = mock_info("owner0001", &[]);
+        let info = message_info(&deps.api.addr_make("owner0001"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
-            new_owner: Some("owner0001".to_string()),
+            new_owner: Some(deps.api.addr_make("owner0001").to_string()),
             new_native_token: "ujunox".to_string(),
         };
         let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
@@ -1826,16 +1849,16 @@ mod tests {
                 .unwrap();
 
             let msg = InstantiateMsg {
-                owner: Some("owner0000".to_string()),
+                owner: Some(deps.api.addr_make("owner0000").to_string()),
                 native_token: "ujunox".to_string(),
             };
 
             let env = mock_env();
-            let info = mock_info("addr0000", &[]);
+            let info = message_info(&deps.api.addr_make("addr0000"), &[]);
             let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
             let env = mock_env();
-            let info = mock_info("owner0000", &[]);
+            let info = message_info(&deps.api.addr_make("owner0000"), &[]);
             let msg = ExecuteMsg::RegisterMerkleRoot {
                 merkle_root: test_data.root,
                 expiration: None,
@@ -1853,7 +1876,7 @@ mod tests {
             };
 
             let env = mock_env();
-            let info = mock_info(claim_addr.as_str(), &[]);
+            let info = message_info(&deps.api.addr_make(claim_addr.as_str()), &[]);
             let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
             assert_eq!(res, ContractError::VerificationFailed {});
 
@@ -1868,7 +1891,7 @@ mod tests {
             };
 
             let env = mock_env();
-            let info = mock_info(claim_addr.as_str(), &[]);
+            let info = message_info(&deps.api.addr_make(claim_addr.as_str()), &[]);
             let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
             let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
                 to_address: claim_addr.clone(),
@@ -1952,16 +1975,16 @@ mod tests {
             let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
             let msg = InstantiateMsg {
-                owner: Some("owner0000".to_string()),
+                owner: Some(deps.api.addr_make("owner0000").to_string()),
                 native_token: "ujunox".to_string(),
             };
 
             let env = mock_env();
-            let info = mock_info("addr0000", &[]);
+            let info = message_info(&deps.api.addr_make("addr0000"), &[]);
             let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
             let env = mock_env();
-            let info = mock_info("owner0000", &[]);
+            let info = message_info(&deps.api.addr_make("owner0000"), &[]);
             let msg = ExecuteMsg::RegisterMerkleRoot {
                 merkle_root: test_data.root,
                 expiration: None,
@@ -1972,7 +1995,7 @@ mod tests {
 
             let pause_msg = ExecuteMsg::Pause { stage: 1u8 };
             let env = mock_env();
-            let info = mock_info("owner0000", &[]);
+            let info = message_info(&deps.api.addr_make("owner0000"), &[]);
             let result = execute(deps.as_mut(), env, info, pause_msg).unwrap();
 
             assert_eq!(
@@ -1980,6 +2003,7 @@ mod tests {
                 vec![attr("action", "pause"), attr("stage_paused", "true"),]
             );
 
+            let account = test_data.account;
             let msg = ExecuteMsg::Claim {
                 amount: test_data.amount,
                 stage: 1u8,
@@ -1988,7 +2012,7 @@ mod tests {
             };
 
             let env = mock_env();
-            let info = mock_info(test_data.account.as_str(), &[]);
+            let info = message_info(&Addr::unchecked(account.clone()), &[]);
             let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
 
             assert_eq!(res, ContractError::StagePaused { stage: 1u8 });
@@ -1998,7 +2022,7 @@ mod tests {
                 new_expiration: Some(AtHeight(12346)),
             };
             let env = mock_env();
-            let info = mock_info("owner0000", &[]);
+            let info = message_info(&deps.api.addr_make("owner0000"), &[]);
             let result = execute(deps.as_mut(), env, info, resume_msg).unwrap();
 
             assert_eq!(
@@ -2012,10 +2036,10 @@ mod tests {
                 sig_info: None,
             };
             let env = mock_env();
-            let info = mock_info(test_data.account.as_str(), &[]);
+            let info = message_info(&Addr::unchecked(account.clone()), &[]);
             let res = execute(deps.as_mut(), env, info, msg).unwrap();
             let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
-                to_address: test_data.account.clone(),
+                to_address: account.clone(),
                 amount: vec![Coin {
                     denom: "ujunox".to_string(),
                     amount: test_data.amount,
@@ -2028,7 +2052,7 @@ mod tests {
                 vec![
                     attr("action", "claim"),
                     attr("stage", "1"),
-                    attr("address", test_data.account.clone()),
+                    attr("address", account),
                     attr("amount", test_data.amount),
                 ]
             );
@@ -2042,16 +2066,17 @@ mod tests {
             }]);
             let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
+            let owner = deps.api.addr_make("owner0000");
             let msg = InstantiateMsg {
-                owner: Some("owner0000".to_string()),
+                owner: Some(owner.to_string()),
                 native_token: "ujunox".to_string(),
             };
 
             let env = mock_env();
-            let info = mock_info("addr0000", &[]);
+            let info = message_info(&deps.api.addr_make("addr0000"), &[]);
             let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-            let info = mock_info("owner0000", &[]);
+            let info = message_info(&owner, &[]);
             let msg = ExecuteMsg::RegisterMerkleRoot {
                 merkle_root: test_data.root,
                 expiration: Some(AtHeight(12500)),
@@ -2066,7 +2091,7 @@ mod tests {
                 amount: None,
             };
 
-            let info = mock_info("owner0000", &[]);
+            let info = message_info(&owner, &[]);
             let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
 
             assert_eq!(
@@ -2079,7 +2104,7 @@ mod tests {
 
             let pause_msg = ExecuteMsg::Pause { stage: 1u8 };
             let env = mock_env();
-            let info = mock_info("owner0000", &[]);
+            let info = message_info(&owner, &[]);
             let result = execute(deps.as_mut(), env.clone(), info, pause_msg).unwrap();
 
             assert_eq!(
@@ -2087,16 +2112,17 @@ mod tests {
                 vec![attr("action", "pause"), attr("stage_paused", "true"),]
             );
             //Withdraw when paused
+            let recipient = deps.api.addr_make("addr0005");
             let msg = ExecuteMsg::WithdrawAll {
-                address: "addr0005".to_string(),
+                address: recipient.to_string(),
                 amount: None,
             };
 
-            let info = mock_info("owner0000", &[]);
+            let info = message_info(&owner, &[]);
             let res = execute(deps.as_mut(), env, info, msg).unwrap();
 
             let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
-                to_address: "addr0005".to_string(),
+                to_address: recipient.to_string(),
                 amount: vec![Coin {
                     denom: "ujunox".to_string(),
                     amount: Uint128::new(10000),
@@ -2108,9 +2134,9 @@ mod tests {
                 res.attributes,
                 vec![
                     attr("action", "withdraw_all"),
-                    attr("address", "owner0000"),
+                    attr("address", owner.to_string()),
                     attr("amount", Uint128::new(10000)),
-                    attr("recipient", "addr0005"),
+                    attr("recipient", recipient.to_string()),
                 ]
             );
         }
