@@ -11,7 +11,7 @@ use sha3::Keccak256;
 
 use crate::error::ContractError;
 use crate::ethereum::{
-    ethereum_address_raw, get_recovery_param,
+    ethereum_address, get_recovery_param,
 };
 use crate::msg::{
     AccountMapResponse, ConfigResponse, ExecuteMsg, InstantiateMsg, IsClaimedResponse,
@@ -246,13 +246,13 @@ pub fn execute_claim(
                 return Err(ContractError::InvalidSignature {})
             }
 
-            let eth_addr = ethereum_address_raw(&calculated_pubkey)?;
+            let proof_addr = ethereum_address(&calculated_pubkey)?;
 
             if sig.extract_addr()? != info.sender.as_str() {
                 return Err(ContractError::InvalidSignature {});
             }
             
-            let proof_addr = String::from_utf8_lossy(&eth_addr).to_string();
+            // let proof_addr = String::from_utf8_lossy(&eth_addr).to_string();
             // Save external address index
             STAGE_ACCOUNT_MAP.save(
                 deps.storage,
@@ -913,7 +913,6 @@ mod tests {
         root: String,
         proofs: Vec<String>,
         signed_msg: Option<SignatureInfo>,
-        hrp: Option<String>,
     }
 
     #[test]
@@ -1876,7 +1875,7 @@ mod tests {
             };
 
             let env = mock_env();
-            let info = message_info(&deps.api.addr_make(claim_addr.as_str()), &[]);
+            let info = message_info(&Addr::unchecked(claim_addr.clone()), &[]);
             let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
             assert_eq!(res, ContractError::VerificationFailed {});
 
@@ -1891,7 +1890,7 @@ mod tests {
             };
 
             let env = mock_env();
-            let info = message_info(&deps.api.addr_make(claim_addr.as_str()), &[]);
+            let info = message_info(&Addr::unchecked(claim_addr.clone()), &[]);
             let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
             let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
                 to_address: claim_addr.clone(),
