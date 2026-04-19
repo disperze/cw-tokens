@@ -1966,6 +1966,48 @@ mod tests {
         }
 
         #[test]
+        fn claim_with_invalid_signature() {
+            let mut deps = mock_dependencies_with_balance(&[Coin {
+                denom: "ujunox".to_string(),
+                amount: Uint128::new(1234567),
+            }]);
+            let test_data: Encoded = from_json(TEST_DATA_EXTERNAL_SIG).unwrap();
+            // random address trying to claim with invalid sig
+            let claim_addr = "wasm1uwcjkghqlz030r989clzqs8zlaujwyphx0yumy".to_string();
+
+            let msg = InstantiateMsg {
+                owner: Some(deps.api.addr_make("owner0000").to_string()),
+                native_token: "ujunox".to_string(),
+            };
+
+            let env = mock_env();
+            let info = message_info(&deps.api.addr_make("addr0000"), &[]);
+            let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
+
+            let env = mock_env();
+            let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+            let msg = ExecuteMsg::RegisterMerkleRoot {
+                merkle_root: test_data.root,
+                expiration: None,
+                start: None,
+                total_amount: None,
+            };
+            let _res = execute(deps.as_mut(), env, info, msg).unwrap();
+
+            let msg = ExecuteMsg::Claim {
+                amount: test_data.amount,
+                stage: 1u8,
+                proof: test_data.proofs,
+                sig_info: test_data.signed_msg,
+            };
+
+            let env = mock_env();
+            let info = message_info(&Addr::unchecked(claim_addr), &[]);
+            let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
+            assert_eq!(res, ContractError::InvalidSignature {});
+        }
+
+        #[test]
         fn claim_paused_airdrop() {
             let mut deps = mock_dependencies_with_balance(&[Coin {
                 denom: "ujunox".to_string(),
