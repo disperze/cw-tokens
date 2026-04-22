@@ -36,3 +36,26 @@ pub fn ethereum_address_raw(pubkey: &[u8]) -> StdResult<[u8; 20]> {
     Ok(hash[hash.len() - 20..].try_into().unwrap())
 }
 
+/// Returns the Ethereum address as a checksummed 0x-prefixed hex string
+pub fn ethereum_address(pubkey: &[u8]) -> StdResult<String> {
+    let raw = ethereum_address_raw(pubkey)?;
+    Ok(to_checksum_address(&raw))
+}
+
+/// EIP-55 checksum encoding of a 20-byte address
+fn to_checksum_address(addr: &[u8; 20]) -> String {
+    let hex = hex::encode(addr);
+    let hash = Keccak256::digest(hex.as_bytes());
+    let checksummed: String = hex
+        .char_indices()
+        .map(|(i, c)| {
+            if c.is_ascii_alphabetic() && (hash[i / 2] >> (if i % 2 == 0 { 4 } else { 0 }) & 0xf) >= 8 {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!("0x{}", checksummed)
+}
+

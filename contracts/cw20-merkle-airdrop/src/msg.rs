@@ -1,6 +1,6 @@
 use crate::ContractError;
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{from_slice, Binary, Uint128};
+use cosmwasm_std::{from_json, Binary, Uint128};
 use cw_utils::{Expiration, Scheduled};
 use serde::{Deserialize, Serialize};
 
@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 pub struct InstantiateMsg {
     /// Owner if none set to info.sender.
     pub owner: Option<String>,
-    pub cw20_token_address: Option<String>,
-    pub native_token: Option<String>,
 }
 
 #[cw_serde]
@@ -18,8 +16,6 @@ pub enum ExecuteMsg {
         /// NewOwner if non sent, contract gets locked. Recipients can receive airdrops
         /// but owner cannot register new stages.
         new_owner: Option<String>,
-        new_cw20_address: Option<String>,
-        new_native_token: Option<String>,
     },
     RegisterMerkleRoot {
         /// MerkleRoot is hex-encoded merkle root.
@@ -27,9 +23,7 @@ pub enum ExecuteMsg {
         expiration: Option<Expiration>,
         start: Option<Scheduled>,
         total_amount: Option<Uint128>,
-        // hrp is the bech32 parameter required for building external network address
-        // from signature message during claim action. example "cosmos", "terra", "juno"
-        hrp: Option<String>,
+        native_token: String,
     },
     /// Claim does not check if contract has enough funds, owner must ensure it.
     Claim {
@@ -41,22 +35,6 @@ pub enum ExecuteMsg {
         /// Target wallet proves identity by sending a signed [SignedClaimMsg](SignedClaimMsg)
         /// containing the recipient address.
         sig_info: Option<SignatureInfo>,
-    },
-    /// Burn the remaining tokens in the stage after expiry time (only owner)
-    Burn {
-        stage: u8,
-    },
-    /// Withdraw the remaining tokens in the stage after expiry time (only owner)
-    Withdraw {
-        stage: u8,
-        address: String,
-    },
-    /// Burn all of the remaining tokens that the contract owns (only owner)
-    BurnAll {},
-    /// Withdraw all/some of the remaining tokens that the contract owns (only owner)
-    WithdrawAll {
-        address: String,
-        amount: Option<Uint128>,
     },
     Pause {
         stage: u8,
@@ -96,8 +74,6 @@ pub enum QueryMsg {
 #[cw_serde]
 pub struct ConfigResponse {
     pub owner: Option<String>,
-    pub cw20_token_address: Option<String>,
-    pub native_token: Option<String>,
 }
 
 #[cw_serde]
@@ -108,6 +84,7 @@ pub struct MerkleRootResponse {
     pub expiration: Expiration,
     pub start: Option<Scheduled>,
     pub total_amount: Uint128,
+    pub native_token: String,
 }
 
 #[cw_serde]
@@ -141,9 +118,6 @@ pub struct AllAccountMapResponse {
     pub address_maps: Vec<AccountMapResponse>,
 }
 
-#[cw_serde]
-pub struct MigrateMsg {}
-
 // Signature verification is done on external airdrop claims.
 #[cw_serde]
 pub struct SignatureInfo {
@@ -152,14 +126,12 @@ pub struct SignatureInfo {
 }
 impl SignatureInfo {
     pub fn extract_addr(&self) -> Result<String, ContractError> {
-        let claim_msg = from_slice::<ClaimMsg>(&self.claim_msg)?;
+        let claim_msg = from_json::<ClaimMsg>(&self.claim_msg)?;
         Ok(claim_msg.address)
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ClaimMsg {
-    // To provide claiming via ledger, the address is passed in the memo field of a cosmos msg.
-    #[serde(rename = "memo")]
     address: String,
 }
