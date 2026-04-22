@@ -1331,8 +1331,9 @@ mod tests {
 
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
+        let owner = deps.api.addr_make("owner0000");
         let msg = InstantiateMsg {
-            owner: Some(deps.api.addr_make("owner0000").to_string()),
+            owner: Some(owner.to_string()),
             native_token: "ujunox".to_string(),
         };
 
@@ -1340,7 +1341,7 @@ mod tests {
         let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: Some(Expiration::AtHeight(12500)),
@@ -1382,7 +1383,7 @@ mod tests {
         // Not expired yet. Can't burn before pause
         let msg = ExecuteMsg::Burn { stage: 1u8 };
 
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
 
         assert_eq!(
@@ -1396,7 +1397,7 @@ mod tests {
         //Pause the stage
         let pause_msg = ExecuteMsg::Pause { stage: 1u8 };
         let env = mock_env();
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let result = execute(deps.as_mut(), env.clone(), info, pause_msg).unwrap();
 
         assert_eq!(
@@ -1407,7 +1408,7 @@ mod tests {
         //Burn when paused
         let msg = ExecuteMsg::Burn { stage: 1u8 };
 
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Burn {
@@ -1423,7 +1424,7 @@ mod tests {
             vec![
                 attr("action", "burn"),
                 attr("stage", "1"),
-                attr("address", "owner0000"),
+                attr("address", owner.to_string()),
                 attr("amount", Uint128::new(9900)),
             ]
         );
@@ -1438,8 +1439,9 @@ mod tests {
 
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
+        let owner = deps.api.addr_make("owner0000");
         let msg = InstantiateMsg {
-            owner: Some(deps.api.addr_make("owner0000").to_string()),
+            owner: Some(owner.to_string()),
             native_token: "ujunox".to_string(),
         };
 
@@ -1447,7 +1449,7 @@ mod tests {
         let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: Some(Expiration::AtHeight(12500)),
@@ -1462,7 +1464,7 @@ mod tests {
         // Can burn after expired stage
         let msg = ExecuteMsg::BurnAll {};
 
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Burn {
@@ -1477,7 +1479,7 @@ mod tests {
             res.attributes,
             vec![
                 attr("action", "burn_all"),
-                attr("address", "owner0000"),
+                attr("address", owner.to_string()),
                 attr("amount", Uint128::new(10000)),
             ]
         );
@@ -1573,8 +1575,9 @@ mod tests {
         }]);
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
+        let owner = deps.api.addr_make("owner0000");
         let msg = InstantiateMsg {
-            owner: Some(deps.api.addr_make("owner0000").to_string()),
+            owner: Some(owner.to_string()),
             native_token: "ujunox".to_string(),
         };
 
@@ -1582,7 +1585,7 @@ mod tests {
         let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: Some(Expiration::AtHeight(12500)),
@@ -1625,16 +1628,17 @@ mod tests {
         env.block.height = 12501;
 
         // Can withdraw after expired stage
+        let addr5 = deps.api.addr_make("addr0005");
         let msg = ExecuteMsg::Withdraw {
             stage: 1u8,
-            address: "addr0005".to_string(),
+            address: addr5.to_string(),
         };
 
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
-            to_address: "addr0005".to_string(),
+            to_address: addr5.to_string(),
             amount: vec![Coin {
                 denom: "ujunox".to_string(),
                 amount: Uint128::new(9900),
@@ -1647,9 +1651,9 @@ mod tests {
             vec![
                 attr("action", "withdraw"),
                 attr("stage", "1"),
-                attr("address", "owner0000"),
+                attr("address", owner.to_string()),
                 attr("amount", Uint128::new(9900)),
-                attr("recipient", "addr0005"),
+                attr("recipient", addr5.to_string()),
             ]
         );
     }
@@ -1662,8 +1666,9 @@ mod tests {
         }]);
         let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
 
+        let owner = deps.api.addr_make("owner0000");
         let msg = InstantiateMsg {
-            owner: Some(deps.api.addr_make("owner0000").to_string()),
+            owner: Some(owner.to_string()),
             native_token: "ujunox".to_string(),
         };
 
@@ -1671,7 +1676,7 @@ mod tests {
         let info = message_info(&deps.api.addr_make("addr0000"), &[]);
         let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let msg = ExecuteMsg::RegisterMerkleRoot {
             merkle_root: test_data.root,
             expiration: Some(Expiration::AtHeight(12500)),
@@ -1684,16 +1689,17 @@ mod tests {
         env.block.height = 12501;
 
         // Can withdraw after expired stage
+        let addr5 = deps.api.addr_make("addr0005");
         let msg = ExecuteMsg::WithdrawAll {
-            address: "addr0005".to_string(),
+            address: addr5.to_string(),
             amount: None,
         };
 
-        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let info = message_info(&owner, &[]);
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
-            to_address: "addr0005".to_string(),
+            to_address: addr5.to_string(),
             amount: vec![Coin {
                 denom: "ujunox".to_string(),
                 amount: Uint128::new(10000),
@@ -1705,9 +1711,9 @@ mod tests {
             res.attributes,
             vec![
                 attr("action", "withdraw_all"),
-                attr("address", "owner0000"),
+                attr("address", owner.to_string()),
                 attr("amount", Uint128::new(10000)),
-                attr("recipient", "addr0005"),
+                attr("recipient", addr5.to_string()),
             ]
         );
     }
