@@ -20,7 +20,7 @@ use crate::msg::{
 };
 use crate::state::{
     Config, CLAIM, CONFIG, LATEST_STAGE, MERKLE_ROOT, STAGE_ACCOUNT_MAP, STAGE_AMOUNT,
-    STAGE_AMOUNT_CLAIMED, STAGE_EXPIRATION, STAGE_PAUSED, STAGE_START,
+    STAGE_AMOUNT_CLAIMED, STAGE_EXPIRATION, STAGE_NATIVE_TOKEN, STAGE_PAUSED, STAGE_START,
 };
 
 // Version info, for migration info
@@ -43,7 +43,7 @@ pub fn instantiate(
     let stage = 0;
     LATEST_STAGE.save(deps.storage, &stage)?;
 
-    make_config(deps, Some(owner), msg.native_token)?;
+    make_config(deps, Some(owner))?;
 
     Ok(Response::default())
 }
@@ -58,19 +58,18 @@ pub fn execute(
     match msg {
         ExecuteMsg::UpdateConfig {
             new_owner,
-            new_native_token,
         } => execute_update_config(
             deps,
             env,
             info,
             new_owner,
-            new_native_token,
         ),
         ExecuteMsg::RegisterMerkleRoot {
             merkle_root,
             expiration,
             start,
             total_amount,
+            native_token,
         } => execute_register_merkle_root(
             deps,
             env,
@@ -79,6 +78,7 @@ pub fn execute(
             expiration,
             start,
             total_amount,
+            native_token,
         ),
         ExecuteMsg::Claim {
             stage,
@@ -97,9 +97,8 @@ pub fn execute(
 pub fn make_config(
     deps: DepsMut,
     owner: Option<Addr>,
-    native_token: String,
 ) -> Result<Response, ContractError> {
-    let config = Config { owner, native_token };
+    let config = Config { owner };
     CONFIG.save(deps.storage, &config)?;
     Ok(Response::default())
 }
@@ -109,7 +108,6 @@ pub fn execute_update_config(
     _env: Env,
     info: MessageInfo,
     new_owner: Option<String>,
-    native_token: String,
 ) -> Result<Response, ContractError> {
     // authorize owner
     let cfg = CONFIG.load(deps.storage)?;
@@ -124,7 +122,7 @@ pub fn execute_update_config(
         tmp_owner = Some(deps.api.addr_validate(&addr)?)
     }
 
-    make_config(deps, tmp_owner, native_token)?;
+    make_config(deps, tmp_owner)?;
 
     Ok(Response::new().add_attribute("action", "update_config"))
 }
@@ -138,6 +136,7 @@ pub fn execute_register_merkle_root(
     expiration: Option<Expiration>,
     start: Option<Scheduled>,
     total_amount: Option<Uint128>,
+    native_token: String,
 ) -> Result<Response, ContractError> {
     let cfg = CONFIG.load(deps.storage)?;
 
@@ -172,11 +171,14 @@ pub fn execute_register_merkle_root(
     STAGE_AMOUNT.save(deps.storage, stage, &amount)?;
     STAGE_AMOUNT_CLAIMED.save(deps.storage, stage, &Uint128::zero())?;
 
+    STAGE_NATIVE_TOKEN.save(deps.storage, stage, &native_token)?;
+
     Ok(Response::new().add_attributes(vec![
         attr("action", "register_merkle_root"),
         attr("stage", stage.to_string()),
         attr("merkle_root", merkle_root),
         attr("total_amount", amount),
+        attr("native_token", native_token),
     ]))
 }
 
@@ -263,7 +265,6 @@ pub fn execute_claim(
     }
 
     // verify merkle root
-    let config = CONFIG.load(deps.storage)?;
     let merkle_root = MERKLE_ROOT.load(deps.storage, stage)?;
 
     let user_input = format!("{}{}", proof_addr, amount);
@@ -291,9 +292,10 @@ pub fn execute_claim(
     claimed_amount += amount;
     STAGE_AMOUNT_CLAIMED.save(deps.storage, stage, &claimed_amount)?;
 
+    let native_token = STAGE_NATIVE_TOKEN.load(deps.storage, stage)?;
     let balance = deps
         .querier
-        .query_balance(env.contract.address, config.native_token.clone())?;
+        .query_balance(env.contract.address, native_token.clone())?;
     if balance.amount < amount {
         return Err(ContractError::InsufficientFunds {
             balance: balance.amount,
@@ -303,7 +305,7 @@ pub fn execute_claim(
     let message: CosmosMsg = CosmosMsg::Bank(BankMsg::Send {
         to_address: info.sender.to_string(),
         amount: vec![Coin {
-            denom: config.native_token,
+            denom: native_token,
             amount,
         }],
     });
@@ -417,7 +419,6 @@ pub fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     let cfg = CONFIG.load(deps.storage)?;
     Ok(ConfigResponse {
         owner: cfg.owner.map(|o| o.to_string()),
-        native_token: cfg.native_token,
     })
 }
 
@@ -426,6 +427,7 @@ pub fn query_merkle_root(deps: Deps, stage: u8) -> StdResult<MerkleRootResponse>
     let expiration = STAGE_EXPIRATION.load(deps.storage, stage)?;
     let start = STAGE_START.may_load(deps.storage, stage)?;
     let total_amount = STAGE_AMOUNT.load(deps.storage, stage)?;
+    let native_token = STAGE_NATIVE_TOKEN.load(deps.storage, stage)?;
 
     let resp = MerkleRootResponse {
         stage,
@@ -433,6 +435,7 @@ pub fn query_merkle_root(deps: Deps, stage: u8) -> StdResult<MerkleRootResponse>
         expiration,
         start,
         total_amount,
+        native_token,
     };
 
     Ok(resp)
@@ -518,7 +521,6 @@ mod tests {
         let owner = deps.api.addr_make("owner0000");
         let msg = InstantiateMsg {
             owner: Some(owner.to_string()),
-            native_token: String::from("ujunox"),
         };
 
         let env = mock_env();
@@ -532,7 +534,6 @@ mod tests {
         let res = query(deps.as_ref(), env.clone(), QueryMsg::Config {}).unwrap();
         let config: ConfigResponse = from_json(&res).unwrap();
         assert_eq!(owner.to_string(), config.owner.unwrap().as_str());
-        assert_eq!("ujunox", config.native_token.as_str());
 
         let res = query(deps.as_ref(), env, QueryMsg::LatestStage {}).unwrap();
         let latest_stage: LatestStageResponse = from_json(&res).unwrap();
@@ -545,20 +546,18 @@ mod tests {
 
         let msg = InstantiateMsg {
             owner: None,
-            native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
         let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
 
-        // update owner and native token
+        // update owner
         let env = mock_env();
         let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let new_owner = deps.api.addr_make("owner0001");
         let msg = ExecuteMsg::UpdateConfig {
             new_owner: Some(new_owner.to_string()),
-            new_native_token: "uatom".to_string(),
         };
 
         let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
@@ -568,14 +567,12 @@ mod tests {
         let res = query(deps.as_ref(), env, QueryMsg::Config {}).unwrap();
         let config: ConfigResponse = from_json(&res).unwrap();
         assert_eq!(new_owner.to_string(), config.owner.unwrap().as_str());
-        assert_eq!("uatom", config.native_token.as_str());
 
         // Unauthorized err
         let env = mock_env();
         let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
             new_owner: None,
-            new_native_token: "ujunox".to_string(),
         };
 
         let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
@@ -586,7 +583,6 @@ mod tests {
         let info = message_info(&deps.api.addr_make("owner0001"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
             new_owner: None,
-            new_native_token: "ujunox".to_string(),
         };
 
         let _res = execute(deps.as_mut(), env.clone(), info, msg).ok();
@@ -594,7 +590,6 @@ mod tests {
         let query_result = query(deps.as_ref(), env, QueryMsg::Config {}).unwrap();
         let config: ConfigResponse = from_json(&query_result).unwrap();
         assert_eq!(None, config.owner);
-        assert_eq!("ujunox", config.native_token.as_str());
     }
 
     #[test]
@@ -603,7 +598,6 @@ mod tests {
 
         let msg = InstantiateMsg {
             owner: Some(deps.api.addr_make("owner0000").to_string()),
-            native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
@@ -619,6 +613,7 @@ mod tests {
             expiration: None,
             start: None,
             total_amount: None,
+            native_token: "ujunox".to_string(),
         };
 
         let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
@@ -632,6 +627,7 @@ mod tests {
                     "634de21cde1044f41d90373733b0f0fb1c1c71f9652b905cdf159e73c4cf0d37",
                 ),
                 attr("total_amount", "0"),
+                attr("native_token", "ujunox"),
             ]
         );
 
@@ -677,7 +673,6 @@ mod tests {
 
         let msg = InstantiateMsg {
             owner: Some(deps.api.addr_make("owner0000").to_string()),
-            native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
@@ -691,6 +686,7 @@ mod tests {
             expiration: None,
             start: None,
             total_amount: None,
+            native_token: "ujunox".to_string(),
         };
         let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
@@ -771,6 +767,7 @@ mod tests {
             expiration: None,
             start: None,
             total_amount: None,
+            native_token: "ujunox".to_string(),
         };
         let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
@@ -817,6 +814,99 @@ mod tests {
     }
 
     #[test]
+    fn claim_native_multiple_stages_different_denoms() {
+        let mut deps = mock_dependencies_with_balance(&[
+            Coin { denom: "ujunox".to_string(), amount: Uint128::new(1234567) },
+            Coin { denom: "uatom".to_string(), amount: Uint128::new(1234567) },
+        ]);
+        let test_data_1: Encoded = from_json(TEST_DATA_1).unwrap();
+        let test_data_2: Encoded = from_json(TEST_DATA_2).unwrap();
+
+        let msg = InstantiateMsg {
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
+        };
+        let env = mock_env();
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
+        let _res = instantiate(deps.as_mut(), env, info, msg).unwrap();
+
+        // register stage 1 with ujunox
+        let env = mock_env();
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data_1.root,
+            expiration: None,
+            start: None,
+            total_amount: None,
+            native_token: "ujunox".to_string(),
+        };
+        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
+
+        // register stage 2 with uatom
+        let env = mock_env();
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data_2.root,
+            expiration: None,
+            start: None,
+            total_amount: None,
+            native_token: "uatom".to_string(),
+        };
+        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
+
+        // claim stage 1 — expects ujunox
+        let account1 = test_data_1.account.clone();
+        let env = mock_env();
+        let info = message_info(&Addr::unchecked(account1.clone()), &[]);
+        let msg = ExecuteMsg::Claim {
+            amount: test_data_1.amount,
+            stage: 1u8,
+            proof: test_data_1.proofs,
+            sig_info: None,
+        };
+        let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+        let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
+            to_address: account1.clone(),
+            amount: vec![Coin { denom: "ujunox".to_string(), amount: test_data_1.amount }],
+        }));
+        assert_eq!(res.messages, vec![expected]);
+
+        // claim stage 2 — expects uatom
+        let account2 = test_data_2.account.clone();
+        let env = mock_env();
+        let info = message_info(&Addr::unchecked(account2.clone()), &[]);
+        let msg = ExecuteMsg::Claim {
+            amount: test_data_2.amount,
+            stage: 2u8,
+            proof: test_data_2.proofs,
+            sig_info: None,
+        };
+        let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+        let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
+            to_address: account2.clone(),
+            amount: vec![Coin { denom: "uatom".to_string(), amount: test_data_2.amount }],
+        }));
+        assert_eq!(res.messages, vec![expected]);
+
+        // verify each stage tracks its own claimed amount
+        assert_eq!(
+            from_json::<TotalClaimedResponse>(
+                &query(deps.as_ref(), env.clone(), QueryMsg::TotalClaimed { stage: 1 }).unwrap()
+            )
+            .unwrap()
+            .total_claimed,
+            test_data_1.amount
+        );
+        assert_eq!(
+            from_json::<TotalClaimedResponse>(
+                &query(deps.as_ref(), env, QueryMsg::TotalClaimed { stage: 2 }).unwrap()
+            )
+            .unwrap()
+            .total_claimed,
+            test_data_2.amount
+        );
+    }
+
+    #[test]
     fn claim_native_insufficient_funds() {
         // Run test 1
         let mut deps = mock_dependencies_with_balance(&[Coin {
@@ -827,7 +917,6 @@ mod tests {
 
         let msg = InstantiateMsg {
             owner: Some(deps.api.addr_make("owner0000").to_string()),
-            native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
@@ -841,6 +930,7 @@ mod tests {
             expiration: None,
             start: None,
             total_amount: None,
+            native_token: "ujunox".to_string(),
         };
         let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
@@ -892,7 +982,6 @@ mod tests {
 
         let msg = InstantiateMsg {
             owner: Some(deps.api.addr_make("owner0000").to_string()),
-            native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
@@ -906,6 +995,7 @@ mod tests {
             expiration: None,
             start: None,
             total_amount: None,
+            native_token: "ujunox".to_string(),
         };
         let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
@@ -960,7 +1050,6 @@ mod tests {
 
         let msg = InstantiateMsg {
             owner: Some(deps.api.addr_make("owner0000").to_string()),
-            native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
@@ -976,6 +1065,7 @@ mod tests {
             expiration: Some(Expiration::AtHeight(100)),
             start: None,
             total_amount: None,
+            native_token: "ujunox".to_string(),
         };
         execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
 
@@ -1003,7 +1093,6 @@ mod tests {
 
         let msg = InstantiateMsg {
             owner: Some(deps.api.addr_make("owner0000").to_string()),
-            native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
@@ -1019,6 +1108,7 @@ mod tests {
             expiration: None,
             start: Some(Scheduled::AtHeight(200_000)),
             total_amount: None,
+            native_token: "ujunox".to_string(),
         };
         execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
 
@@ -1046,7 +1136,6 @@ mod tests {
 
         let msg = InstantiateMsg {
             owner: Some(deps.api.addr_make("owner0000").to_string()),
-            native_token: "ujunox".to_string(),
         };
 
         let env = mock_env();
@@ -1062,6 +1151,7 @@ mod tests {
             expiration: None,
             start: None,
             total_amount: None,
+            native_token: "ujunox".to_string(),
         };
         let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
@@ -1070,7 +1160,6 @@ mod tests {
         let info = message_info(&deps.api.addr_make("owner0000"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
             new_owner: Some(deps.api.addr_make("owner0001").to_string()),
-            new_native_token: "ujunox".to_string(),
         };
 
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
@@ -1081,7 +1170,6 @@ mod tests {
         let info = message_info(&deps.api.addr_make("owner0001"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
             new_owner: None,
-            new_native_token: "ujunox".to_string(),
         };
 
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
@@ -1096,6 +1184,7 @@ mod tests {
             expiration: None,
             start: None,
             total_amount: None,
+            native_token: "ujunox".to_string(),
         };
         let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
         assert_eq!(res, ContractError::Unauthorized {});
@@ -1105,7 +1194,6 @@ mod tests {
         let info = message_info(&deps.api.addr_make("owner0001"), &[]);
         let msg = ExecuteMsg::UpdateConfig {
             new_owner: Some(deps.api.addr_make("owner0001").to_string()),
-            new_native_token: "ujunox".to_string(),
         };
         let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
         assert_eq!(res, ContractError::Unauthorized {});
@@ -1134,7 +1222,6 @@ mod tests {
 
             let msg = InstantiateMsg {
                 owner: Some(deps.api.addr_make("owner0000").to_string()),
-                native_token: "ujunox".to_string(),
             };
 
             let env = mock_env();
@@ -1148,6 +1235,7 @@ mod tests {
                 expiration: None,
                 start: None,
                 total_amount: None,
+                native_token: "ujunox".to_string(),
             };
             let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
@@ -1262,7 +1350,6 @@ mod tests {
 
             let msg = InstantiateMsg {
                 owner: Some(deps.api.addr_make("owner0000").to_string()),
-                native_token: "ujunox".to_string(),
             };
 
             let env = mock_env();
@@ -1276,6 +1363,7 @@ mod tests {
                 expiration: None,
                 start: None,
                 total_amount: None,
+                native_token: "ujunox".to_string(),
             };
             let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
@@ -1302,7 +1390,6 @@ mod tests {
 
             let msg = InstantiateMsg {
                 owner: Some(deps.api.addr_make("owner0000").to_string()),
-                native_token: "ujunox".to_string(),
             };
 
             let env = mock_env();
@@ -1316,6 +1403,7 @@ mod tests {
                 expiration: None,
                 start: None,
                 total_amount: None,
+                native_token: "ujunox".to_string(),
             };
             let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 

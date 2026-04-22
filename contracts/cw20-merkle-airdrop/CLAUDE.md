@@ -53,7 +53,6 @@ This is a **CosmWasm smart contract** for merkle-tree-based token airdrops. It s
 
 1. **Owner registers a merkle root** (`RegisterMerkleRoot`) → increments `stage` counter
 2. **Recipients claim** (`Claim`) by providing their merkle proof → contract verifies and sends tokens
-3. **Owner burns/withdraws** unclaimed tokens after expiry
 
 ### Module Structure
 
@@ -83,7 +82,7 @@ This is a **CosmWasm smart contract** for merkle-tree-based token airdrops. It s
 
 ### Cross-Chain / Ethereum Claim Flow
 
-When `RegisterMerkleRoot` is called with an `hrp` (e.g., `"cosmos"`, `"terra"`), that stage supports cross-chain claims. In `Claim`, the optional `sig_info` field (`SignatureInfo { claim_msg, signature }`) carries an Ethereum-signed message. The contract:
+When `RegisterMerkleRoot` is called with an `hrp` (e.g., `"cosmos"`, `"juno"`), that stage supports cross-chain claims. In `Claim`, the optional `sig_info` field (`SignatureInfo { claim_msg, signature }`) carries an Ethereum-signed message. The contract:
 
 1. Recovers the Ethereum public key from the secp256k1 signature
 2. Derives the 20-byte Ethereum address (Keccak256 of uncompressed pubkey)

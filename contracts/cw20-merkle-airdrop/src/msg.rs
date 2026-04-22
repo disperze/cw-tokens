@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 pub struct InstantiateMsg {
     /// Owner if none set to info.sender.
     pub owner: Option<String>,
-    pub native_token: String,
 }
 
 #[cw_serde]
@@ -17,7 +16,6 @@ pub enum ExecuteMsg {
         /// NewOwner if non sent, contract gets locked. Recipients can receive airdrops
         /// but owner cannot register new stages.
         new_owner: Option<String>,
-        new_native_token: String,
     },
     RegisterMerkleRoot {
         /// MerkleRoot is hex-encoded merkle root.
@@ -25,6 +23,7 @@ pub enum ExecuteMsg {
         expiration: Option<Expiration>,
         start: Option<Scheduled>,
         total_amount: Option<Uint128>,
+        native_token: String,
     },
     /// Claim does not check if contract has enough funds, owner must ensure it.
     Claim {
@@ -75,7 +74,6 @@ pub enum QueryMsg {
 #[cw_serde]
 pub struct ConfigResponse {
     pub owner: Option<String>,
-    pub native_token: String,
 }
 
 #[cw_serde]
@@ -86,6 +84,7 @@ pub struct MerkleRootResponse {
     pub expiration: Expiration,
     pub start: Option<Scheduled>,
     pub total_amount: Uint128,
+    pub native_token: String,
 }
 
 #[cw_serde]
