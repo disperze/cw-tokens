@@ -2,7 +2,8 @@ use crate::enumerable::query_all_address_map;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, attr, to_json_binary
+    attr, to_json_binary, Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env,
+    MessageInfo, Response, StdResult, Uint128,
 };
 use cw2::set_contract_version;
 use cw_utils::{Expiration, Scheduled};
@@ -10,9 +11,7 @@ use sha2::Digest;
 use sha3::Keccak256;
 
 use crate::error::ContractError;
-use crate::ethereum::{
-    ethereum_address, get_recovery_param,
-};
+use crate::ethereum::{ethereum_address, get_recovery_param};
 use crate::msg::{
     AccountMapResponse, ConfigResponse, ExecuteMsg, InstantiateMsg, IsClaimedResponse,
     IsPausedResponse, LatestStageResponse, MerkleRootResponse, QueryMsg, SignatureInfo,
@@ -26,6 +25,7 @@ use crate::state::{
 // Version info, for migration info
 const CONTRACT_NAME: &str = "crates.io:cw20-merkle-airdrop";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MAX_PROOF_LENGTH: usize = 64;
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -56,14 +56,7 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::UpdateConfig {
-            new_owner,
-        } => execute_update_config(
-            deps,
-            env,
-            info,
-            new_owner,
-        ),
+        ExecuteMsg::UpdateConfig { new_owner } => execute_update_config(deps, env, info, new_owner),
         ExecuteMsg::RegisterMerkleRoot {
             merkle_root,
             expiration,
@@ -94,10 +87,7 @@ pub fn execute(
     }
 }
 
-pub fn make_config(
-    deps: DepsMut,
-    owner: Option<Addr>,
-) -> Result<Response, ContractError> {
+pub fn make_config(deps: DepsMut, owner: Option<Addr>) -> Result<Response, ContractError> {
     let config = Config { owner };
     CONFIG.save(deps.storage, &config)?;
     Ok(Response::default())
@@ -150,7 +140,11 @@ pub fn execute_register_merkle_root(
     let mut root_buf: [u8; 32] = [0; 32];
     hex::decode_to_slice(&merkle_root, &mut root_buf)?;
 
-    let stage = LATEST_STAGE.update(deps.storage, |stage| -> StdResult<_> { Ok(stage + 1) })?;
+    let stage = LATEST_STAGE.update(deps.storage, |stage| -> Result<_, ContractError> {
+        stage
+            .checked_add(1)
+            .ok_or(ContractError::StageLimitReached {})
+    })?;
 
     MERKLE_ROOT.save(deps.storage, stage, &merkle_root)?;
     LATEST_STAGE.save(deps.storage, &stage)?;
@@ -191,6 +185,12 @@ pub fn execute_claim(
     proof: Vec<String>,
     sig_info: Option<SignatureInfo>,
 ) -> Result<Response, ContractError> {
+    if proof.len() > MAX_PROOF_LENGTH {
+        return Err(ContractError::ProofTooLong {
+            max: MAX_PROOF_LENGTH,
+        });
+    }
+
     // airdrop begun
     let start = STAGE_START.may_load(deps.storage, stage)?;
     if let Some(start) = start {
@@ -211,13 +211,16 @@ pub fn execute_claim(
 
     // if present verify signature and extract external address or use info.sender as proof
     // if signature is not present in the message, verification will fail since info.sender is not present in the merkle root
-    let proof_addr = match sig_info {
-        None => info.sender.to_string(),
+    let (proof_addr, external_account_map) = match sig_info {
+        None => (info.sender.to_string(), None),
         Some(sig) => {
             // verify signature
+            if sig.signature.len() != 65 {
+                return Err(ContractError::InvalidSignature {});
+            }
 
             let msg_str = String::from_utf8(sig.claim_msg.to_vec())
-            .map_err(|_| ContractError::InvalidInput {})?;
+                .map_err(|_| ContractError::InvalidInput {})?;
             // Hashing
             let mut hasher = Keccak256::new();
             hasher.update(format!("\x19Ethereum Signed Message:\n{}", msg_str.len()));
@@ -225,10 +228,11 @@ pub fn execute_claim(
             let hash = hasher.finalize();
 
             // Decompose signature
-            let (v, rs) = match sig.signature.as_slice().split_last() {
-                Some(pair) => pair,
-                None => return Err(StdError::generic_err("Signature must not be empty").into()),
-            };
+            let (v, rs) = sig
+                .signature
+                .as_slice()
+                .split_last()
+                .ok_or(ContractError::InvalidSignature {})?;
             let recovery = get_recovery_param(*v)?;
 
             // Verification
@@ -237,24 +241,17 @@ pub fn execute_claim(
             let valid_signature = result.unwrap_or_default();
 
             if !valid_signature {
-                return Err(ContractError::InvalidSignature {})
+                return Err(ContractError::InvalidSignature {});
             }
 
             let proof_addr = ethereum_address(&calculated_pubkey)?;
 
-            if sig.extract_addr()? != info.sender.as_str() {
+            let signed_addr = deps.api.addr_validate(&sig.extract_addr()?)?;
+            if signed_addr != info.sender {
                 return Err(ContractError::InvalidSignature {});
             }
-            
-            // let proof_addr = String::from_utf8_lossy(&eth_addr).to_string();
-            // Save external address index
-            STAGE_ACCOUNT_MAP.save(
-                deps.storage,
-                (stage, proof_addr.clone()),
-                &info.sender.to_string(),
-            )?;
 
-            proof_addr
+            (proof_addr, Some(info.sender.to_string()))
         }
     };
 
@@ -284,13 +281,11 @@ pub fn execute_claim(
         return Err(ContractError::VerificationFailed {});
     }
 
-    // Update claim index to the current stage
-    CLAIM.save(deps.storage, (proof_addr, stage), &true)?;
-
     // Update total claimed to reflect
-    let mut claimed_amount = STAGE_AMOUNT_CLAIMED.load(deps.storage, stage)?;
-    claimed_amount += amount;
-    STAGE_AMOUNT_CLAIMED.save(deps.storage, stage, &claimed_amount)?;
+    let claimed_amount = STAGE_AMOUNT_CLAIMED
+        .load(deps.storage, stage)?
+        .checked_add(amount)
+        .map_err(|_| ContractError::ClaimAmountOverflow {})?;
 
     let native_token = STAGE_NATIVE_TOKEN.load(deps.storage, stage)?;
     let balance = deps
@@ -302,6 +297,14 @@ pub fn execute_claim(
             amount,
         });
     }
+
+    // Update claim/account indexes only after all fallible validation has passed.
+    STAGE_AMOUNT_CLAIMED.save(deps.storage, stage, &claimed_amount)?;
+    CLAIM.save(deps.storage, (proof_addr.clone(), stage), &true)?;
+    if let Some(host_address) = external_account_map {
+        STAGE_ACCOUNT_MAP.save(deps.storage, (stage, proof_addr), &host_address)?;
+    }
+
     let message: CosmosMsg = CosmosMsg::Bank(BankMsg::Send {
         to_address: info.sender.to_string(),
         amount: vec![Coin {

@@ -28,3 +28,4 @@ packages/*/schema
 contracts/*/schema
 
 .devcontainer/
+.kilo/

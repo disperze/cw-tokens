@@ -1,4 +1,4 @@
-use cosmwasm_std::{StdError, RecoverPubkeyError, Uint128};
+use cosmwasm_std::{RecoverPubkeyError, StdError, Uint128};
 use cw_utils::{Expiration, Scheduled};
 use hex::FromHexError;
 use thiserror::Error;
@@ -23,9 +23,17 @@ pub enum ContractError {
     #[error("Already claimed")]
     Claimed {},
 
+    #[error("Airdrop stage limit reached")]
+    StageLimitReached {},
+
+    #[error("Claimed amount overflow")]
+    ClaimAmountOverflow {},
+
+    #[error("Merkle proof too long: max {max}")]
+    ProofTooLong { max: usize },
+
     #[error("Wrong length")]
     WrongLength {},
-
 
     #[error("Invalid signature")]
     InvalidSignature {},
