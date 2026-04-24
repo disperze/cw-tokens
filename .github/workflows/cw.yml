@@ -1,0 +1,34 @@
+name: cw-CI
+
+on:
+  push:
+    branches: [ evmos-distribution ]
+  pull_request:
+    branches: [ evmos-distribution ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build
+        run: cargo build
+
+      - name: Run unit tests
+        run: cargo test --lib --package cw20-merkle-airdrop
+
+      - name: Compile WASM contract
+        run: cargo wasm
+        working-directory: contracts/cw20-merkle-airdrop
+        env:
+          RUSTFLAGS: "-C link-arg=-s"
