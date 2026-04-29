@@ -146,7 +146,7 @@ pub fn execute_register_merkle_root(
             .ok_or(ContractError::StageLimitReached {})
     })?;
 
-    MERKLE_ROOT.save(deps.storage, stage, &merkle_root)?;
+    MERKLE_ROOT.save(deps.storage, stage, &root_buf)?;
     LATEST_STAGE.save(deps.storage, &stage)?;
 
     // save expiration
@@ -275,9 +275,7 @@ pub fn execute_claim(
         Ok::<[u8; 32], ContractError>(sha2::Sha256::digest(hashes.concat()).into())
     })?;
 
-    let mut root_buf: [u8; 32] = [0; 32];
-    hex::decode_to_slice(merkle_root, &mut root_buf)?;
-    if root_buf != hash {
+    if merkle_root != hash {
         return Err(ContractError::VerificationFailed {});
     }
 
@@ -434,7 +432,7 @@ pub fn query_merkle_root(deps: Deps, stage: u8) -> StdResult<MerkleRootResponse>
 
     let resp = MerkleRootResponse {
         stage,
-        merkle_root,
+        merkle_root: hex::encode(merkle_root),
         expiration,
         start,
         total_amount,

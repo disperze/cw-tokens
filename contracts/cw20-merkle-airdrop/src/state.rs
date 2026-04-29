@@ -34,7 +34,7 @@ pub const STAGE_ACCOUNT_MAP_KEY: &str = "stage_account_map";
 pub const STAGE_ACCOUNT_MAP: Map<(u8, String), String> = Map::new(STAGE_ACCOUNT_MAP_KEY);
 
 pub const MERKLE_ROOT_PREFIX: &str = "merkle_root";
-pub const MERKLE_ROOT: Map<u8, String> = Map::new(MERKLE_ROOT_PREFIX);
+pub const MERKLE_ROOT: Map<u8, [u8; 32]> = Map::new(MERKLE_ROOT_PREFIX);
 
 pub const CLAIM_PREFIX: &str = "claim";
 pub const CLAIM: Map<(String, u8), bool> = Map::new(CLAIM_PREFIX);
