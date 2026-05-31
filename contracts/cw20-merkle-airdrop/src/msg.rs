@@ -43,6 +43,10 @@ pub enum ExecuteMsg {
         stage: u8,
         new_expiration: Option<Expiration>,
     },
+    /// Withdraw remaining funds of a specific denom to the owner. Only callable by owner.
+    WithdrawAll {
+        denom: String,
+    },
 }
 
 #[cw_serde]

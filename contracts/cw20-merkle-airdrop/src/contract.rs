@@ -5,7 +5,7 @@ use cosmwasm_std::{
     attr, to_json_binary, Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env,
     MessageInfo, Response, StdResult, Uint128,
 };
-use cw2::set_contract_version;
+use cw2::{get_contract_version, set_contract_version};
 use cw_utils::{Expiration, Scheduled};
 use sha2::Digest;
 use sha3::Keccak256;
@@ -49,6 +49,18 @@ pub fn instantiate(
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(deps: DepsMut, _env: Env, _msg: ()) -> Result<Response, ContractError> {
+    let ver = get_contract_version(deps.storage)?;
+    if ver.contract != CONTRACT_NAME {
+        return Err(ContractError::CannotMigrate {
+            previous_contract: ver.contract,
+        });
+    }
+    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+    Ok(Response::default())
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
     env: Env,
@@ -84,6 +96,7 @@ pub fn execute(
             stage,
             new_expiration,
         } => execute_resume(deps, env, info, stage, new_expiration),
+        ExecuteMsg::WithdrawAll { denom } => execute_withdraw_all(deps, env, info, denom),
     }
 }
 
@@ -391,6 +404,39 @@ pub fn execute_resume(
         attr("action", "resume"),
         attr("stage_paused", "false"),
     ]))
+}
+
+pub fn execute_withdraw_all(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    denom: String,
+) -> Result<Response, ContractError> {
+    let cfg = CONFIG.load(deps.storage)?;
+    let owner = cfg.owner.ok_or(ContractError::Unauthorized {})?;
+    if info.sender != owner {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let balance = deps
+        .querier
+        .query_balance(env.contract.address, denom.clone())?;
+
+    let message: CosmosMsg = CosmosMsg::Bank(BankMsg::Send {
+        to_address: owner.to_string(),
+        amount: vec![Coin {
+            denom,
+            amount: balance.amount,
+        }],
+    });
+
+    Ok(Response::new()
+        .add_message(message)
+        .add_attributes(vec![
+            attr("action", "withdraw_all"),
+            attr("recipient", owner),
+            attr("amount", balance.amount),
+        ]))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -1198,6 +1244,87 @@ mod tests {
         };
         let res = execute(deps.as_mut(), env, info, msg).unwrap_err();
         assert_eq!(res, ContractError::Unauthorized {});
+    }
+
+    #[test]
+    fn withdraw_all() {
+        let owner = "owner0000";
+        let denom = "ujunox";
+
+        let mut deps = mock_dependencies_with_balance(&[Coin {
+            denom: denom.to_string(),
+            amount: Uint128::new(5000),
+        }]);
+
+        let msg = InstantiateMsg {
+            owner: Some(deps.api.addr_make(owner).to_string()),
+        };
+        let env = mock_env();
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
+        instantiate(deps.as_mut(), env, info, msg).unwrap();
+
+        // non-owner is rejected
+        let env = mock_env();
+        let info = message_info(&deps.api.addr_make("stranger"), &[]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::WithdrawAll { denom: denom.to_string() },
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // owner withdraws successfully
+        let owner_addr = deps.api.addr_make(owner);
+        let env = mock_env();
+        let info = message_info(&owner_addr, &[]);
+        let res = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::WithdrawAll { denom: denom.to_string() },
+        )
+        .unwrap();
+
+        let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
+            to_address: owner_addr.to_string(),
+            amount: vec![Coin {
+                denom: denom.to_string(),
+                amount: Uint128::new(5000),
+            }],
+        }));
+        assert_eq!(res.messages, vec![expected]);
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("action", "withdraw_all"),
+                attr("recipient", owner_addr.to_string()),
+                attr("amount", "5000"),
+            ]
+        );
+
+        // frozen contract (owner == None) is rejected
+        let env = mock_env();
+        let info = message_info(&owner_addr, &[]);
+        execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::UpdateConfig { new_owner: None },
+        )
+        .unwrap();
+
+        let env = mock_env();
+        let info = message_info(&owner_addr, &[]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::WithdrawAll { denom: denom.to_string() },
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
     }
 
     mod external_sig {
