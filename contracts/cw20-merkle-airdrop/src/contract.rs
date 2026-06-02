@@ -14,7 +14,7 @@ use crate::error::ContractError;
 use crate::ethereum::{ethereum_address, get_recovery_param};
 use crate::msg::{
     AccountMapResponse, ConfigResponse, ExecuteMsg, InstantiateMsg, IsClaimedResponse,
-    IsPausedResponse, LatestStageResponse, MerkleRootResponse, QueryMsg, SignatureInfo,
+    IsPausedResponse, LatestStageResponse, MerkleRootResponse, MigrateMsg, QueryMsg, SignatureInfo,
     TotalClaimedResponse,
 };
 use crate::state::{
@@ -49,7 +49,7 @@ pub fn instantiate(
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn migrate(deps: DepsMut, _env: Env, _msg: ()) -> Result<Response, ContractError> {
+pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
     let ver = get_contract_version(deps.storage)?;
     if ver.contract != CONTRACT_NAME {
         return Err(ContractError::CannotMigrate {

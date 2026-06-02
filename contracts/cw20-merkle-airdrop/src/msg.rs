@@ -122,6 +122,9 @@ pub struct AllAccountMapResponse {
     pub address_maps: Vec<AccountMapResponse>,
 }
 
+#[cw_serde]
+pub struct MigrateMsg {}
+
 // Signature verification is done on external airdrop claims.
 #[cw_serde]
 pub struct SignatureInfo {
