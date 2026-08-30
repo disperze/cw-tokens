@@ -49,7 +49,7 @@ pub fn instantiate(
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
     let ver = get_contract_version(deps.storage)?;
     if ver.contract != CONTRACT_NAME {
         return Err(ContractError::CannotMigrate {
@@ -57,7 +57,21 @@ pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, C
         });
     }
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-    Ok(Response::default())
+
+    if msg.new_native_token.trim().is_empty() {
+        return Err(ContractError::InvalidInput {});
+    }
+    let old_native_token = STAGE_NATIVE_TOKEN
+        .may_load(deps.storage, msg.stage)?
+        .ok_or(ContractError::InvalidInput {})?;
+    STAGE_NATIVE_TOKEN.save(deps.storage, msg.stage, &msg.new_native_token)?;
+
+    Ok(Response::new().add_attributes(vec![
+        attr("action", "migrate"),
+        attr("stage", msg.stage.to_string()),
+        attr("old_native_token", old_native_token),
+        attr("new_native_token", msg.new_native_token),
+    ]))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -858,6 +872,100 @@ mod tests {
             .total_claimed,
             test_data.amount
         );
+    }
+
+    #[test]
+    fn migrate_stage_native_token() {
+        let mut deps = mock_dependencies_with_balance(&[Coin {
+            denom: "ibc/INJ".to_string(),
+            amount: Uint128::new(1234567),
+        }]);
+        let test_data: Encoded = from_json(TEST_DATA_1).unwrap();
+
+        let msg = InstantiateMsg {
+            owner: Some(deps.api.addr_make("owner0000").to_string()),
+        };
+        let info = message_info(&deps.api.addr_make("addr0000"), &[]);
+        instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        let info = message_info(&deps.api.addr_make("owner0000"), &[]);
+        let msg = ExecuteMsg::RegisterMerkleRoot {
+            merkle_root: test_data.root,
+            expiration: None,
+            start: None,
+            total_amount: None,
+            native_token: "ibc/NOBLE".to_string(),
+        };
+        execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // unknown stage is rejected
+        let err = migrate(
+            deps.as_mut(),
+            mock_env(),
+            MigrateMsg {
+                stage: 9,
+                new_native_token: "ibc/INJ".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::InvalidInput {});
+
+        // empty denom is rejected
+        let err = migrate(
+            deps.as_mut(),
+            mock_env(),
+            MigrateMsg {
+                stage: 1,
+                new_native_token: "  ".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::InvalidInput {});
+
+        // migrate stage 1 denom
+        let res = migrate(
+            deps.as_mut(),
+            mock_env(),
+            MigrateMsg {
+                stage: 1,
+                new_native_token: "ibc/INJ".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("action", "migrate"),
+                attr("stage", "1"),
+                attr("old_native_token", "ibc/NOBLE"),
+                attr("new_native_token", "ibc/INJ"),
+            ]
+        );
+
+        let merkle_root: MerkleRootResponse = from_json(
+            &query(deps.as_ref(), mock_env(), QueryMsg::MerkleRoot { stage: 1 }).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(merkle_root.native_token, "ibc/INJ");
+
+        // claim pays out in the new denom
+        let account = test_data.account;
+        let msg = ExecuteMsg::Claim {
+            amount: test_data.amount,
+            stage: 1u8,
+            proof: test_data.proofs,
+            sig_info: None,
+        };
+        let info = message_info(&Addr::unchecked(account.clone()), &[]);
+        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let expected = SubMsg::new(CosmosMsg::Bank(BankMsg::Send {
+            to_address: account,
+            amount: vec![Coin {
+                denom: "ibc/INJ".to_string(),
+                amount: test_data.amount,
+            }],
+        }));
+        assert_eq!(res.messages, vec![expected]);
     }
 
     #[test]

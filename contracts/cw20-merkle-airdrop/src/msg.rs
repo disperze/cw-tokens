@@ -123,7 +123,12 @@ pub struct AllAccountMapResponse {
 }
 
 #[cw_serde]
-pub struct MigrateMsg {}
+pub struct MigrateMsg {
+    /// Stage whose payout denom is replaced.
+    pub stage: u8,
+    /// New native denom (e.g. "ibc/<hash>").
+    pub new_native_token: String,
+}
 
 // Signature verification is done on external airdrop claims.
 #[cw_serde]
